@@ -10,6 +10,12 @@ logger = logging.getLogger(__name__)
 
 
 class CRMClient:
+    """
+    Класс для работы с API Мегаплана.
+    Необходимо единожды создать его экземпляр при запуске приложения и передавать в хендлеры и иные методы,
+    желательно через Middleware
+    """
+
     def __init__(self, base_url: str, username: str, password: str, program_id: int):
         self.base_url = base_url
         self.username = username
@@ -124,6 +130,7 @@ class CRMClient:
         endpoint: str,
         params: dict | None = None,
         json_data: dict | None = None,
+        files_payload: dict | None = None,
     ) -> dict | None:
         """Обертка для выполнения запросов к API CRM."""
         token = await self.get_access_token()
@@ -139,7 +146,12 @@ class CRMClient:
                 f"Выполнение запроса: {method} {endpoint}, params={params}, json={json_data}"
             )
             response = await session.request(
-                method, endpoint, headers=headers, params=params, json=json_data
+                method,
+                endpoint,
+                headers=headers,
+                params=params,
+                json=json_data,
+                files=files_payload,
             )
             response.raise_for_status()
             return response.json()
@@ -467,3 +479,189 @@ class CRMClient:
                 f"Ошибка при создании сделки: неожиданный формат ответа от API. Ответ: {response_data}"
             )
             return None
+
+    async def upload_file_from_bytes(
+        self,
+        file_content: bytes,
+        file_name: str,
+        file_type: str | None = None,
+    ) -> dict[str, any] | None:
+        """
+        Асинхронно загружает файл (представленный как байты) в Мегаплан,
+        используя обновленный метод _request.
+
+        Args:
+            file_content (bytes): Содержимое файла в виде байтов.
+            file_name (str): Имя файла, которое будет сохранено в Мегаплане.
+            file_type (str, optional): MIME-тип файла.
+
+        Returns:
+            Dict[str, Any] | None: Информация о загруженном файле от API Мегаплана или None в случае ошибки.
+        """
+        logger.info(
+            f"Подготовка к загрузке файла '{file_name}' (тип: {file_type if file_type else 'не указан'}). Размер: {len(file_content)} байт."
+        )
+
+        # Эндпоинт для загрузки файлов
+        upload_endpoint = "/api/file"
+
+        # Подготовка данных для multipart/form-data
+        # Ключ "files[]" согласно документации Мегаплана
+        files_data_for_request = {"files[]": (file_name, file_content, file_type)}
+
+        response_json = await self._request(
+            method="POST",
+            endpoint=upload_endpoint,
+            files_payload=files_data_for_request,
+        )
+
+        if not response_json:
+            # Ошибка уже залогирована в _request
+            logger.error(
+                f"Загрузка файла '{file_name}' не удалась (ответ от _request is None)."
+            )
+            return None
+
+        # Анализ ответа согласно документации ("В ответ получаем id созданного файла")
+        # и вашего предыдущего кода (ожидание списка в "data")
+        if (
+            "data" in response_json
+            and isinstance(response_json["data"], list)
+            and len(response_json["data"]) > 0
+        ):
+            uploaded_file_info = response_json["data"][0]
+            file_id = uploaded_file_info.get("id", "неизвестен")
+            logger.info(
+                f"Файл '{file_name}' успешно загружен через _request. ID файла: {file_id}"
+            )
+            return uploaded_file_info
+        elif (
+            "id" in response_json and response_json.get("contentType") == "File"
+        ):  # Если API вернуло одиночный объект файла напрямую
+            logger.info(
+                f"Файл '{file_name}' успешно загружен через _request. ID файла: {response_json.get('id')}"
+            )
+            return response_json  # Возвращаем весь объект файла
+        else:
+            logger.error(
+                f"Ошибка при загрузке файла '{file_name}': неожиданный формат JSON-ответа от API. Ответ: {response_json}"
+            )
+            return None
+
+    async def _generic_attach_files_to_deal_field(
+        self,
+        deal_id: int | str,
+        field_name: str,
+        file_ids: list[str | int] | str | int,
+    ) -> bool:
+        """
+        Внутренний универсальный метод для прикрепления файлов к указанному полю сделки.
+        Только добавляет файлы, не очищает поле при пустом списке file_ids.
+        """
+        if not deal_id or not field_name:
+            logger.error(
+                f"Для обновления поля '{field_name}' сделки {deal_id} не указан ID сделки или имя поля."
+            )
+            return False
+
+        if not file_ids:  # Если file_ids пустой (None, "", [], 0 и т.д.)
+            logger.warning(
+                f"Не переданы ID файлов для прикрепления к полю '{field_name}' сделки {deal_id}. Действие не будет выполнено."
+            )
+            return False
+
+        current_file_ids_str: list[str]
+        if isinstance(file_ids, (str, int)):
+            current_file_ids_str = [str(file_ids)]
+        elif isinstance(file_ids, list):
+            if not file_ids:
+                logger.warning(
+                    f"Передан пустой список file_ids для поля '{field_name}' сделки {deal_id}. Файлы не будут прикреплены."
+                )
+                return False
+            current_file_ids_str = [str(fid) for fid in file_ids if fid]
+            if not current_file_ids_str:
+                logger.warning(
+                    f"Список file_ids после обработки оказался пустым для поля '{field_name}' сделки {deal_id}. Файлы не будут прикреплены."
+                )
+                return False
+        else:
+            logger.error(
+                f"Параметр file_ids должен быть строкой, числом или списком. Получен: {type(file_ids)}"
+            )
+            return False
+
+        logger.info(
+            f"Попытка прикрепления файлов {current_file_ids_str} к полю '{field_name}' сделки ID: {str(deal_id)}"
+        )
+
+        file_objects_payload = [
+            {"contentType": "File", "id": fid_str} for fid_str in current_file_ids_str
+        ]
+
+        # Payload для обновления сделки.
+        # ВАЖНО: Этот payload перезапишет поле field_name полностью.
+        # Если нужно ДОБАВИТЬ файлы к уже существующим, логика должна быть сложнее:
+        # 1. Прочитать текущее значение поля field_name из сделки.
+        # 2. Добавить новые file_objects_payload к существующим.
+        # 3. Отправить обновленный полный список.
+        # Пока реализуем простую перезапись поля новыми файлами.
+        update_payload = {
+            "id": str(deal_id),
+            "contentType": "Deal",
+            field_name: file_objects_payload,
+        }
+
+        endpoint = f"/api/v3/deal/{str(deal_id)}"
+        http_method_for_update = "POST"
+
+        response_data = await self._request(
+            method=http_method_for_update, endpoint=endpoint, json_data=update_payload
+        )
+
+        if response_data:
+            meta = response_data.get("meta")
+            if not meta.get("errors"):
+                logger.info(
+                    f"Поле '{field_name}' сделки ID {deal_id} успешно обновлено файлами: {current_file_ids_str}."
+                )
+                return True
+            else:
+                logger.warning(
+                    f"Обновление поля '{field_name}' для сделки {deal_id} файлами {current_file_ids_str} могло завершиться некорректно (неожиданный ответ). Ответ API: {response_data}"
+                )
+                return True
+        else:
+            logger.error(
+                f"Не удалось обновить поле '{field_name}' сделки {deal_id} файлами {current_file_ids_str}."
+            )
+            return False
+
+    async def attach_files_to_deal_visit_docs(
+        self, deal_id: int | str, file_ids: list[str | int] | str | int
+    ) -> bool:
+        """
+        Прикрепляет файлы (документы и фото с выезда) к соответствующему кастомному полю сделки.
+        """
+        field_name = "Category1000076CustomFieldViezdDokumentiIFotoSViezda"
+        logger.info(
+            f"Вызов attach_files_to_deal_visit_docs для сделки ID: {deal_id}, файлы: {file_ids}"
+        )
+        return await self._generic_attach_files_to_deal_field(
+            deal_id=deal_id, field_name=field_name, file_ids=file_ids
+        )
+
+    async def attach_files_to_deal_main_attachments(
+        self, deal_id: int | str, file_ids: list[str | int] | str | int
+    ) -> bool:
+        """
+        Прикрепляет файлы к основному полю аттачей сделки ('attaches').
+        Уточните регистр имени поля "attaches" или "Attaches" согласно API.
+        """
+        field_name = "attaches"  # Используем нижний регистр. Если API Мегаплана требует "Attaches", измените.
+        logger.info(
+            f"Вызов attach_files_to_deal_main_attachments для сделки ID: {deal_id}, файлы: {file_ids}"
+        )
+        return await self._generic_attach_files_to_deal_field(
+            deal_id=deal_id, field_name=field_name, file_ids=file_ids
+        )

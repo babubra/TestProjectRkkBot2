@@ -1,5 +1,4 @@
 import asyncio
-import datetime
 from config import get_env_settings
 from crm_service.crm_client import CRMClient
 import logging
@@ -19,20 +18,11 @@ async def main() -> None:
         program_id=env_settings.MEGAPLAN_PROGRAM_ID,
     )
 
-    yesterday = datetime.date.today() - datetime.timedelta(days=1)
-    deals = await crm_client.get_deals(visit_date=yesterday)
-    print(len(deals))
-
-    deal = await crm_client.create_deal(
-        description="ТЕСТ",
-        manager_id=1000003,
-        ticket_visit_datetime=datetime.datetime.now(),
-        megaplan_user_id=1000003,
-        name="ТЕСТ",
-        cadastral_to_visit="ТЕСТ",
-        address_to_visit="ТЕСТ",
+    s = await crm_client.attach_files_to_deal_visit_docs(
+        file_ids=[80088, 80087], deal_id=4937
     )
-    print(deal)
+
+    print(s)
 
 
 if __name__ == "__main__":
