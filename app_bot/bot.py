@@ -1,7 +1,10 @@
 import asyncio
-from config import get_env_settings
-from crm_service.crm_client import CRMClient
+from .config.config import get_env_settings
+from .database.crud import get_user_by_telegram_id, create_user, get_users
+from .database.engine import DatabaseManager
+from .crm_service.crm_client import CRMClient
 import logging
+from .config.user_roles_config import MANAGER_ROLE_PERMISSIONS
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
@@ -17,12 +20,11 @@ async def main() -> None:
         password=env_settings.MEGAPLAN_PASSWORD,
         program_id=env_settings.MEGAPLAN_PROGRAM_ID,
     )
-
-    s = await crm_client.attach_files_to_deal_visit_docs(
-        file_ids=[80088, 80087], deal_id=4937
-    )
-
-    print(s)
+    db_manager = DatabaseManager(url=env_settings.DATABASE_URL)
+    await db_manager.drop_all()
+    # async with db_manager.session() as session:
+    #     all_users_sequence = await get_users(session, limit=10)
+    # print(f"ВСЕ ЮЗЕРЫ {all_users_sequence}")
 
 
 if __name__ == "__main__":

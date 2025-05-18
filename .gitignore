@@ -63,3 +63,4 @@ Thumbs.db
 # Log files
 *.log
 .env
+main.sqlite3

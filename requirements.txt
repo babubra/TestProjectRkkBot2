@@ -1,6 +1,6 @@
 httpx==0.28.1
 pydantic_settings==2.9.1
-
-
+SQLAlchemy[asyncio]>=2.0
+aiosqlite>=0.17
 
 # построение зависимостей: pipreqs ./app_bot --encoding utf-8 --force --savepath ./requirements.txt
