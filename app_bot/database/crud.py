@@ -1,18 +1,18 @@
 # Файл: app_bot/database/crud.py
 
 import logging
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, List, Sequence  # Sequence импортирован
-
-from .models import User, Permission
+from datetime import date, timedelta
+from .models import User, Permission, AppSettings, DailyLimitOverride
 
 logger = logging.getLogger(__name__)
 
 
 async def get_user_by_telegram_id(
     session: AsyncSession, telegram_id: int
-) -> Optional[User]:
+) -> User | None:
     """
     Асинхронно получает одного пользователя из базы данных по его telegram_id.
     """
@@ -91,3 +91,208 @@ async def get_users(
         f"Найдено {len(users)} пользователей (пропущено: {skip}, лимит: {limit})."
     )
     return users
+
+
+async def get_app_settings(session: AsyncSession) -> AppSettings:
+    """
+    Получает настройки приложения. Если настроек нет, создает их с дефолтными значениями.
+    """
+    logger.info("Запрос настроек приложения.")
+    stmt = select(AppSettings).order_by(AppSettings.id).limit(1)
+    result = await session.execute(stmt)
+    settings = result.scalar_one_or_none()
+
+    if not settings:
+        logger.warning(
+            "Настройки приложения не найдены. Создание настроек по умолчанию."
+        )
+        settings = AppSettings()  # Используем default=10 из модели
+        session.add(settings)
+        await session.flush()
+        await session.refresh(settings)
+        logger.info(
+            f"Созданы настройки по умолчанию: ID={settings.id}, Limit={settings.default_daily_limit}"
+        )
+    else:
+        logger.info(
+            f"Настройки приложения найдены: ID={settings.id}, Limit={settings.default_daily_limit}"
+        )
+
+    return settings
+
+
+async def update_default_limit(session: AsyncSession, new_limit: int) -> AppSettings:
+    """
+    Обновляет лимит по умолчанию в настройках приложения.
+    """
+    logger.info(f"Попытка обновления лимита по умолчанию на {new_limit}.")
+
+    # Проверка типа данных
+    if not isinstance(new_limit, int):
+        raise TypeError(
+            f"Лимит должен быть целым числом, получен тип: {type(new_limit).__name__}"
+        )
+
+    # Проверка на отрицательное значение
+    if new_limit < 0:
+        raise ValueError("Лимит не может быть отрицательным.")
+
+    settings = await get_app_settings(session)  # Получаем (или создаем) настройки
+    settings.default_daily_limit = new_limit
+    await session.flush()
+    await session.refresh(settings)
+    logger.info(
+        f"Лимит по умолчанию успешно обновлен на {settings.default_daily_limit}."
+    )
+    return settings
+
+
+async def get_override_for_date(
+    session: AsyncSession, target_date: date
+) -> Optional[DailyLimitOverride]:
+    """
+    Получает переопределение лимита для конкретной даты.
+    """
+    logger.info(f"Запрос переопределения лимита для даты: {target_date}")
+    stmt = select(DailyLimitOverride).where(
+        DailyLimitOverride.limit_date == target_date
+    )
+    result = await session.execute(stmt)
+    override = result.scalar_one_or_none()
+    if override:
+        logger.info(
+            f"Найдено переопределение для {target_date}: Лимит={override.daily_limit}"
+        )
+    else:
+        logger.info(f"Переопределение для {target_date} не найдено.")
+    return override
+
+
+async def set_daily_limit_override(
+    session: AsyncSession, target_date: date, limit: int
+) -> DailyLimitOverride:
+    """
+    Устанавливает или обновляет переопределение лимита для конкретной даты.
+    """
+    logger.info(f"Установка/обновление лимита для {target_date} на {limit}.")
+    if limit < 0:
+        raise ValueError("Лимит не может быть отрицательным.")
+
+    override = await get_override_for_date(session, target_date)
+
+    if override:
+        override.daily_limit = limit
+        logger.info(f"Лимит для {target_date} обновлен на {limit}.")
+    else:
+        override = DailyLimitOverride(limit_date=target_date, daily_limit=limit)
+        session.add(override)
+        logger.info(f"Установлен новый лимит для {target_date}: {limit}.")
+
+    await session.flush()
+    await session.refresh(override)
+    return override
+
+
+async def delete_daily_limit_override(session: AsyncSession, target_date: date) -> bool:
+    """
+    Удаляет переопределение лимита для конкретной даты.
+    Возвращает True, если удаление произошло, иначе False.
+    """
+    logger.info(f"Попытка удаления переопределения лимита для {target_date}.")
+    override = await get_override_for_date(session, target_date)
+
+    if override:
+        await session.delete(override)
+        await session.flush()
+        logger.info(f"Переопределение для {target_date} успешно удалено.")
+        return True
+    else:
+        logger.warning(
+            f"Переопределение для {target_date} не найдено, удаление не требуется."
+        )
+        return False
+
+
+async def delete_daily_limit_override_range(
+    session: AsyncSession, start_date: date, end_date: date
+) -> int:
+    """
+    Удаляет переопределения лимитов для указанного диапазона дат (включительно).
+    Возвращает количество удаленных записей.
+    """
+    logger.info(
+        f"Попытка удаления переопределений лимитов для диапазона {start_date} - {end_date}."
+    )
+    if start_date > end_date:
+        logger.error("Начальная дата не может быть позже конечной.")
+        raise ValueError("Начальная дата не может быть позже конечной.")
+
+    # Создаем SQL-запрос DELETE с условием WHERE для диапазона дат
+    stmt = (
+        delete(DailyLimitOverride)
+        .where(DailyLimitOverride.limit_date >= start_date)
+        .where(DailyLimitOverride.limit_date <= end_date)
+    )
+
+    # Выполняем запрос
+    result = await session.execute(stmt)
+
+    # Получаем количество удаленных строк
+    deleted_count = result.rowcount
+
+    # Применяем изменения (хотя execute(delete) обычно автокоммитится в рамках сессии,
+    # flush гарантирует синхронизацию перед дальнейшими действиями)
+    await session.flush()
+
+    logger.info(
+        f"Удалено {deleted_count} переопределений для диапазона {start_date} - {end_date}."
+    )
+    return deleted_count
+
+
+async def set_daily_limit_override_range(
+    session: AsyncSession, start_date: date, end_date: date, limit: int
+) -> List[DailyLimitOverride]:
+    """
+    Устанавливает или обновляет переопределение лимита для диапазона дат.
+    """
+    logger.info(
+        f"Установка/обновление лимита для диапазона {start_date} - {end_date} на {limit}."
+    )
+    if limit < 0:
+        raise ValueError("Лимит не может быть отрицательным.")
+    if start_date > end_date:
+        raise ValueError("Начальная дата не может быть позже конечной.")
+
+    overrides_list = []
+    current_date = start_date
+    while current_date <= end_date:
+        # Используем существующую функцию для установки/обновления
+        override = await set_daily_limit_override(session, current_date, limit)
+        overrides_list.append(override)
+        current_date += timedelta(days=1)
+
+    logger.info(
+        f"Установлены лимиты для {len(overrides_list)} дней в диапазоне {start_date} - {end_date}."
+    )
+    return overrides_list
+
+
+async def get_actual_limit_for_date(session: AsyncSession, target_date: date) -> int:
+    """
+    Получает фактический лимит заявок для указанной даты,
+    учитывая переопределения и настройки по умолчанию.
+    """
+    logger.info(f"Запрос фактического лимита для даты: {target_date}")
+    override = await get_override_for_date(session, target_date)
+    if override is not None:
+        logger.info(
+            f"Используется переопределенный лимит для {target_date}: {override.daily_limit}"
+        )
+        return override.daily_limit
+    else:
+        settings = await get_app_settings(session)
+        logger.info(
+            f"Используется лимит по умолчанию для {target_date}: {settings.default_daily_limit}"
+        )
+        return settings.default_daily_limit

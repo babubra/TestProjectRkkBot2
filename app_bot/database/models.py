@@ -1,15 +1,16 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, BigInteger
+from sqlalchemy import DateTime, Integer, String, BigInteger, Date
 from sqlalchemy.types import JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
+from datetime import date
 
 
 class Permission(str, enum.Enum):
     """
-    Перечисление гранулярных разрешений.
+    Перечисление гранулярных разрешений пользователей.
     """
 
     MANAGE_USERS = "manage_users"  # Право на создание/управление пользователями
@@ -66,3 +67,37 @@ class User(Base):
     def has_permission(self, permission: Permission) -> bool:
         """Проверяет, есть ли у пользователя указанное разрешение."""
         return permission.value in self.permissions
+
+
+class AppSettings(Base):
+    """
+    Модель для хранения общих настроек приложения.
+    Предполагается, что в этой таблице будет только одна строка (берем первую).
+    """
+
+    __tablename__ = "app_settings"
+
+    default_daily_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=10
+    )  # Лимит по умолчанию = 10
+
+    def __repr__(self) -> str:
+        return f"<AppSettings(id={self.id}, default_daily_limit={self.default_daily_limit})>"
+
+
+class DailyLimitOverride(Base):
+    """
+    Модель для хранения исключений из общего лимита заявок на конкретную дату.
+    """
+
+    __tablename__ = "daily_limit_overrides"
+
+    limit_date: Mapped[date] = mapped_column(
+        Date, unique=True, index=True, nullable=False
+    )
+    daily_limit: Mapped[int] = mapped_column(
+        Integer, nullable=False
+    )  # Лимит для конкретной даты
+
+    def __repr__(self) -> str:
+        return f"<DailyLimitOverride(id={self.id}, date={self.limit_date}, limit={self.daily_limit})>"
