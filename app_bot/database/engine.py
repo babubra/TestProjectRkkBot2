@@ -58,6 +58,11 @@ class DatabaseManager:
                 await sess.rollback()
                 raise
 
+    @property
+    def session_factory(self) -> async_sessionmaker[AsyncSession]:
+        """Возвращает фабрику сессий."""
+        return self._session_factory
+
     async def get_session(self) -> AsyncGenerator[AsyncSession, None]:
         """Генератор для middleware-стиля."""
         async with self.session() as sess:

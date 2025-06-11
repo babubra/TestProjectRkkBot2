@@ -1,4 +1,6 @@
 import asyncio
+
+from app_bot.middlewares.db_session_middleware import DbSessionMiddleware
 from .config.config import get_env_settings
 from .database.engine import DatabaseManager
 from .crm_service.crm_client import CRMClient
@@ -25,8 +27,10 @@ async def main() -> None:
     default_props = DefaultBotProperties(parse_mode=ParseMode.HTML)
     bot = Bot(token=env_settings.BOT_TOKEN, default=default_props)
     dp = Dispatcher()
+    dp.update.middleware(DbSessionMiddleware(session_pool=db_manager.session_factory))
+
     dp.include_router(admin_router)
-    dp["db_manager"] = db_manager
+
     dp["env_settings"] = env_settings
 
     await bot.delete_webhook(drop_pending_updates=True)
