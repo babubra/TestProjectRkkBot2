@@ -1,6 +1,6 @@
 import contextlib
 import logging
-from typing import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app_bot.database.models import Base
+
 
 logger = logging.getLogger(__name__)
 

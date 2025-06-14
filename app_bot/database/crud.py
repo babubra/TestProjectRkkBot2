@@ -1,18 +1,19 @@
 # Файл: app_bot/database/crud.py
 
 import logging
-from sqlalchemy import select, delete
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional, List, Sequence  # Sequence импортирован
+from collections.abc import Sequence
 from datetime import date, timedelta
-from .models import User, Permission, AppSettings, DailyLimitOverride
+
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .models import AppSettings, DailyLimitOverride, Permission, User
+
 
 logger = logging.getLogger(__name__)
 
 
-async def get_user_by_telegram_id(
-    session: AsyncSession, telegram_id: int
-) -> User | None:
+async def get_user_by_telegram_id(session: AsyncSession, telegram_id: int) -> User | None:
     """
     Асинхронно получает одного пользователя из базы данных по его telegram_id.
     """
@@ -30,12 +31,40 @@ async def get_user_by_telegram_id(
     return user
 
 
+async def delete_user_by_telegram_id(session: AsyncSession, telegram_id: int) -> bool:
+    """
+    Асинхронно удаляет одного пользователя из базы данных по его telegram_id.
+
+    Args:
+        session: Экземпляр AsyncSession для взаимодействия с БД.
+        telegram_id: Telegram ID пользователя, которого нужно удалить.
+
+    Returns:
+        True, если пользователь был найден и успешно удален, иначе False.
+    """
+    logger.info(f"Попытка удаления пользователя по telegram_id: {telegram_id}")
+
+    user_to_delete = await get_user_by_telegram_id(session, telegram_id)
+
+    if user_to_delete:
+        await session.delete(user_to_delete)
+        # Применяем изменения в базе данных в рамках текущей сессии/транзакции.
+        await session.flush()
+        logger.info(f"Пользователь с telegram_id {telegram_id} успешно удален.")
+        return True
+    else:
+        logger.warning(
+            f"Пользователь с telegram_id {telegram_id} не найден. Удаление не требуется."
+        )
+        return False
+
+
 async def create_user(
     session: AsyncSession,
     telegram_id: int,
-    username: Optional[str] = None,
-    megaplan_user_id: Optional[int] = None,
-    initial_permissions: Optional[List[Permission]] = None,
+    username: str | None = None,
+    megaplan_user_id: int | None = None,
+    initial_permissions: list[Permission] | None = None,
 ) -> User:
     """
     Асинхронно создает нового пользователя и сохраняет его в базе данных.
@@ -66,9 +95,7 @@ async def create_user(
     return new_user
 
 
-async def get_users(
-    session: AsyncSession, skip: int = 0, limit: int = 100
-) -> Sequence[User]:
+async def get_users(session: AsyncSession, skip: int = 0, limit: int = 100) -> Sequence[User]:
     """
     Асинхронно получает список пользователей из базы данных с пагинацией.
 
@@ -87,9 +114,7 @@ async def get_users(
 
     users = result.scalars().all()
 
-    logger.info(
-        f"Найдено {len(users)} пользователей (пропущено: {skip}, лимит: {limit})."
-    )
+    logger.info(f"Найдено {len(users)} пользователей (пропущено: {skip}, лимит: {limit}).")
     return users
 
 
@@ -103,9 +128,7 @@ async def get_app_settings(session: AsyncSession) -> AppSettings:
     settings = result.scalar_one_or_none()
 
     if not settings:
-        logger.warning(
-            "Настройки приложения не найдены. Создание настроек по умолчанию."
-        )
+        logger.warning("Настройки приложения не найдены. Создание настроек по умолчанию.")
         settings = AppSettings()  # Используем default=10 из модели
         session.add(settings)
         await session.flush()
@@ -141,28 +164,22 @@ async def update_default_limit(session: AsyncSession, new_limit: int) -> AppSett
     settings.default_daily_limit = new_limit
     await session.flush()
     await session.refresh(settings)
-    logger.info(
-        f"Лимит по умолчанию успешно обновлен на {settings.default_daily_limit}."
-    )
+    logger.info(f"Лимит по умолчанию успешно обновлен на {settings.default_daily_limit}.")
     return settings
 
 
 async def get_override_for_date(
     session: AsyncSession, target_date: date
-) -> Optional[DailyLimitOverride]:
+) -> DailyLimitOverride | None:
     """
     Получает переопределение лимита для конкретной даты.
     """
     logger.info(f"Запрос переопределения лимита для даты: {target_date}")
-    stmt = select(DailyLimitOverride).where(
-        DailyLimitOverride.limit_date == target_date
-    )
+    stmt = select(DailyLimitOverride).where(DailyLimitOverride.limit_date == target_date)
     result = await session.execute(stmt)
     override = result.scalar_one_or_none()
     if override:
-        logger.info(
-            f"Найдено переопределение для {target_date}: Лимит={override.daily_limit}"
-        )
+        logger.info(f"Найдено переопределение для {target_date}: Лимит={override.daily_limit}")
     else:
         logger.info(f"Переопределение для {target_date} не найдено.")
     return override
@@ -207,9 +224,7 @@ async def delete_daily_limit_override(session: AsyncSession, target_date: date) 
         logger.info(f"Переопределение для {target_date} успешно удалено.")
         return True
     else:
-        logger.warning(
-            f"Переопределение для {target_date} не найдено, удаление не требуется."
-        )
+        logger.warning(f"Переопределение для {target_date} не найдено, удаление не требуется.")
         return False
 
 
@@ -252,7 +267,7 @@ async def delete_daily_limit_override_range(
 
 async def set_daily_limit_override_range(
     session: AsyncSession, start_date: date, end_date: date, limit: int
-) -> List[DailyLimitOverride]:
+) -> list[DailyLimitOverride]:
     """
     Устанавливает или обновляет переопределение лимита для диапазона дат.
     """

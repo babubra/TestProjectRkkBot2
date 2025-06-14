@@ -1,17 +1,17 @@
 import asyncio
-
-from app_bot.middlewares.db_session_middleware import DbSessionMiddleware
-from .config.config import get_env_settings
-from .database.engine import DatabaseManager
-from .crm_service.crm_client import CRMClient
 import logging
-from .config.user_roles_config import MANAGER_ROLE_PERMISSIONS
-from .database.models import AppSettings
-import datetime
+
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+
+from app_bot.middlewares.auth_middleware import AuthMiddleware
+from app_bot.middlewares.db_session_middleware import DbSessionMiddleware
+
+from .config.config import get_env_settings
+from .database.engine import DatabaseManager
 from .handlers.admin_handlers import admin_router
+
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
@@ -27,6 +27,9 @@ async def main() -> None:
     default_props = DefaultBotProperties(parse_mode=ParseMode.HTML)
     bot = Bot(token=env_settings.BOT_TOKEN, default=default_props)
     dp = Dispatcher()
+    dp.update.middleware(
+        AuthMiddleware(session_pool=db_manager.session_factory, env_settings=env_settings)
+    )
     dp.update.middleware(DbSessionMiddleware(session_pool=db_manager.session_factory))
 
     dp.include_router(admin_router)
