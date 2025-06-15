@@ -28,7 +28,7 @@ class UserCallback(CallbackData, prefix="user_manage"):
 
 def get_user_management_kb(user_telegram_id: int) -> InlineKeyboardMarkup:
     """
-    Создает инлайн-клавиатуру с кнопками 'Редактировать' и 'Удалить'
+    Создает инлайн-клавиатуру с кнопками 'Удалить'
     для конкретного пользователя.
 
     Args:
@@ -40,10 +40,10 @@ def get_user_management_kb(user_telegram_id: int) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
 
     # Кнопка "Редактировать"
-    builder.button(
-        text="✍️ Редактировать",
-        callback_data=UserCallback(action="edit", user_telegram_id=user_telegram_id).pack(),
-    )
+    # builder.button(
+    #     text="✍️ Редактировать",
+    #     callback_data=UserCallback(action="edit", user_telegram_id=user_telegram_id).pack(),
+    # )
 
     # Кнопка "Удалить"
     builder.button(
@@ -52,6 +52,6 @@ def get_user_management_kb(user_telegram_id: int) -> InlineKeyboardMarkup:
     )
 
     # Располагаем кнопки в один ряд
-    builder.adjust(2)
+    # builder.adjust(2)
 
     return builder.as_markup()

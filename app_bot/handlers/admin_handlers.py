@@ -288,21 +288,3 @@ async def delete_user_callback(
             exc_info=True,
         )
         await query.answer("❌ Произошла ошибка при удалении.", show_alert=True)
-
-
-# Хендлер для обработки нажатия на кнопку "Редактировать"
-@admin_router.callback_query(
-    UserCallback.filter(F.action == "edit"), HasPermissionFilter(Permission.MANAGE_USERS)
-)
-async def edit_user_callback(
-    query: CallbackQuery, callback_data: UserCallback, state: FSMContext
-):
-    user_to_edit_id = callback_data.user_telegram_id
-
-    # Здесь будет ваша логика по запуску FSM для редактирования
-    # ...
-
-    await query.answer(f"Редактирование пользователя {user_to_edit_id}...")
-    await query.message.answer(
-        f"Запускаю процесс редактирования для ID <code>{user_to_edit_id}</code>..."
-    )
