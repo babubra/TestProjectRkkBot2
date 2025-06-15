@@ -3,17 +3,6 @@ from aiogram.types import InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 
-def get_cancel_kb() -> InlineKeyboardMarkup:
-    """
-    Создает инлайн-клавиатуру с кнопками 'Отмена'
-    """
-    builder = InlineKeyboardBuilder()
-
-    builder.button(text="❌ Отмена", callback_data="admin_cancel")
-
-    return builder.as_markup()
-
-
 class UserCallback(CallbackData, prefix="user_manage"):
     """
     Фабрика Callback-данных для действий с пользователями.
@@ -24,6 +13,17 @@ class UserCallback(CallbackData, prefix="user_manage"):
 
     action: str
     user_telegram_id: int
+
+
+def get_cancel_kb() -> InlineKeyboardMarkup:
+    """
+    Создает инлайн-клавиатуру с кнопками 'Отмена'
+    """
+    builder = InlineKeyboardBuilder()
+
+    builder.button(text="❌ Отмена", callback_data="admin_cancel")
+
+    return builder.as_markup()
 
 
 def get_user_management_kb(user_telegram_id: int) -> InlineKeyboardMarkup:
@@ -54,4 +54,24 @@ def get_user_management_kb(user_telegram_id: int) -> InlineKeyboardMarkup:
     # Располагаем кнопки в один ряд
     # builder.adjust(2)
 
+    return builder.as_markup()
+
+
+def get_limits_management_kb(default_limit: int) -> InlineKeyboardMarkup:
+    """
+    Инлайн-клавиатура для управления лимитами заявок.
+    Содержит кнопки Лимиты по умолчанию, Лимиты на дату, Отмена.
+    """
+
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=f"📊 Лимиты по умолчанию ({default_limit})",
+        callback_data="admin_limits_default",
+    )
+    builder.button(
+        text="📅 Лимиты на дату",
+        callback_data="admin_limits_date",
+    )
+    builder.button(text="❌ Отмена", callback_data="admin_cancel")
+    builder.adjust(2, 1)
     return builder.as_markup()

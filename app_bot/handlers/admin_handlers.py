@@ -20,6 +20,7 @@ from app_bot.filters.permission_filters import HasPermissionFilter
 from app_bot.keyboards.admin_keyboards import (
     UserCallback,
     get_cancel_kb,
+    get_limits_management_kb,
     get_user_management_kb,
 )
 
@@ -61,6 +62,8 @@ async def get_admin_menu_message(message: Message):
         👤 /create_user - Создание нового пользователя
         📋 /users_list - Просмотр всех пользователей
 
+        📊 /ticket_limits - Управление лимитами заявок
+
         🏠 /start - Главное меню
         """
     await message.answer(text=instruction_text)
@@ -77,6 +80,16 @@ async def cancel_cmd(message: Message, state: FSMContext):
 )
 async def admin_cmd(message: Message):
     await get_admin_menu_message(message)
+
+
+@admin_router.message(
+    Command("ticket_limits"),
+    HasPermissionFilter([Permission.MANAGE_USERS, Permission.SET_TRIP_LIMITS]),
+)
+async def ticket_limits_menu_cmd(message: Message, session: AsyncSession):
+    app_settings = await crud.get_app_settings(session)
+    kb = get_limits_management_kb(default_limit=app_settings.default_daily_limit)
+    await message.answer(""" 📋 Управление лимитами заявок 📋""", reply_markup=kb)
 
 
 @admin_router.message(Command("create_user"), HasPermissionFilter(Permission.MANAGE_USERS))
