@@ -52,27 +52,40 @@ ROLES_MAP = {
 }
 
 
-async def get_admin_menu_message(message: Message):
-    instruction_text = """
-        🔧 РЕЖИМ АДМИНИСТРАТОРА 🔧
+async def get_admin_menu_message(event: Message | CallbackQuery) -> None:
+    """
+    Отправляет главное админ-меню.
+    Принимает либо Message, либо CallbackQuery.
 
-        Добро пожаловать в панель управления!
-        Выберите необходимое действие:
+    • Для Message — просто отвечаем сообщением.
+    • Для CallbackQuery — сначала закрываем «крутилку» методом
+    `CallbackQuery.answer()` (0-200 симв.[8]), затем
+    отправляем новое сообщение в чат при помощи `event.message.answer(...)`.
+    """
+    instruction_text = (
+        "🔧 РЕЖИМ АДМИНИСТРАТОРА 🔧\n\n"
+        "Добро пожаловать в панель управления!\n"
+        "Выберите необходимое действие:\n\n"
+        "👤 /create_user – Создание нового пользователя\n"
+        "📋 /users_list – Просмотр всех пользователей\n\n"
+        "📊 /ticket_limits – Управление лимитами заявок\n\n"
+        "🏠 /start – Главное меню"
+    )
 
-        👤 /create_user - Создание нового пользователя
-        📋 /users_list - Просмотр всех пользователей
-
-        📊 /ticket_limits - Управление лимитами заявок
-
-        🏠 /start - Главное меню
-        """
-    await message.answer(text=instruction_text)
+    if isinstance(event, Message):
+        await event.answer(text=instruction_text)
+    elif isinstance(event, CallbackQuery):
+        # Закрываем progress-bar; текст ≤200 симв.[8]
+        await event.answer()
+        await event.message.answer(text=instruction_text)
+    else:
+        raise TypeError("Аргумент должен быть Message или CallbackQuery")
 
 
 @admin_router.callback_query(F.data == "admin_cancel")
-async def cancel_cmd(message: Message, state: FSMContext):
+async def cancel_cmd(query: CallbackQuery, state: FSMContext):
     await state.clear()
-    await get_admin_menu_message(message)
+    await get_admin_menu_message(query)
 
 
 @admin_router.message(
@@ -240,7 +253,6 @@ async def process_and_save_user_data_cmd(
         await state.clear()
 
 
-# Хендлер для вывода списка пользователей
 @admin_router.message(Command("users_list"), HasPermissionFilter(Permission.MANAGE_USERS))
 async def show_users_list_cmd(message: Message, session: AsyncSession):
     users = await crud.get_users(session, limit=100)  # Получаем всех пользователей
@@ -262,6 +274,7 @@ async def show_users_list_cmd(message: Message, session: AsyncSession):
         await message.answer(
             text=user_info, reply_markup=get_user_management_kb(user.telegram_id)
         )
+    await get_admin_menu_message(message)
 
 
 @admin_router.callback_query(
