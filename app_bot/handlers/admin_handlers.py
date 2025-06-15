@@ -66,12 +66,20 @@ async def get_admin_menu_message(message: Message):
     await message.answer(text=instruction_text)
 
 
-@admin_router.message(Command("admin"), HasPermissionFilter(Permission.VIEW_TICKETS))
+@admin_router.callback_query(F.data == "admin_cancel")
+async def cancel_cmd(message: Message, state: FSMContext):
+    await state.clear()
+    await get_admin_menu_message(message)
+
+
+@admin_router.message(
+    Command("admin"), HasPermissionFilter([Permission.MANAGE_USERS, Permission.SET_TRIP_LIMITS])
+)
 async def admin_cmd(message: Message):
     await get_admin_menu_message(message)
 
 
-@admin_router.message(Command("create_user"))
+@admin_router.message(Command("create_user"), HasPermissionFilter(Permission.MANAGE_USERS))
 async def start_user_creation_cmd(message: Message, state: FSMContext):
     """
     Этот хендлер запускает процесс создания нового пользователя.
@@ -112,7 +120,9 @@ async def start_user_creation_cmd(message: Message, state: FSMContext):
     await state.set_state(CreateUserFSM.waiting_for_user_data)
 
 
-@admin_router.message(CreateUserFSM.waiting_for_user_data, F.text)
+@admin_router.message(
+    CreateUserFSM.waiting_for_user_data, F.text, HasPermissionFilter(Permission.MANAGE_USERS)
+)
 async def process_and_save_user_data_cmd(
     message: Message, state: FSMContext, session: AsyncSession
 ):
@@ -218,7 +228,7 @@ async def process_and_save_user_data_cmd(
 
 
 # Хендлер для вывода списка пользователей
-@admin_router.message(Command("users_list"))
+@admin_router.message(Command("users_list"), HasPermissionFilter(Permission.MANAGE_USERS))
 async def show_users_list_cmd(message: Message, session: AsyncSession):
     users = await crud.get_users(session, limit=100)  # Получаем всех пользователей
 
@@ -241,7 +251,9 @@ async def show_users_list_cmd(message: Message, session: AsyncSession):
         )
 
 
-@admin_router.callback_query(UserCallback.filter(F.action == "delete"))
+@admin_router.callback_query(
+    UserCallback.filter(F.action == "delete"), HasPermissionFilter(Permission.MANAGE_USERS)
+)
 async def delete_user_callback(
     query: CallbackQuery,
     callback_data: UserCallback,
@@ -279,11 +291,13 @@ async def delete_user_callback(
 
 
 # Хендлер для обработки нажатия на кнопку "Редактировать"
-@admin_router.callback_query(UserCallback.filter(F.action == "edit"))
+@admin_router.callback_query(
+    UserCallback.filter(F.action == "edit"), HasPermissionFilter(Permission.MANAGE_USERS)
+)
 async def edit_user_callback(
     query: CallbackQuery, callback_data: UserCallback, state: FSMContext
 ):
-    user_to_edit_id = callback_data.user_id
+    user_to_edit_id = callback_data.user_telegram_id
 
     # Здесь будет ваша логика по запуску FSM для редактирования
     # ...

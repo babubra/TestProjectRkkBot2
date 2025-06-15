@@ -5,7 +5,6 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from app_bot.middlewares.auth_middleware import AuthMiddleware
 from app_bot.middlewares.db_session_middleware import DbSessionMiddleware
 
 from .config.config import get_env_settings
@@ -14,8 +13,12 @@ from .handlers.admin_handlers import admin_router
 
 
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+    level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 )
+
+# Отключаем debug логи от aiosqlite
+logging.getLogger("aiosqlite").setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,14 +30,9 @@ async def main() -> None:
     default_props = DefaultBotProperties(parse_mode=ParseMode.HTML)
     bot = Bot(token=env_settings.BOT_TOKEN, default=default_props)
     dp = Dispatcher()
-    dp.update.middleware(
-        AuthMiddleware(session_pool=db_manager.session_factory, env_settings=env_settings)
-    )
     dp.update.middleware(DbSessionMiddleware(session_pool=db_manager.session_factory))
 
     dp.include_router(admin_router)
-
-    dp["env_settings"] = env_settings
 
     await bot.delete_webhook(drop_pending_updates=True)
 

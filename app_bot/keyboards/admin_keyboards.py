@@ -9,7 +9,7 @@ def get_cancel_kb() -> InlineKeyboardMarkup:
     """
     builder = InlineKeyboardBuilder()
 
-    builder.button(text="❌ Отмена", callback_data="cancel_user_creation")
+    builder.button(text="❌ Отмена", callback_data="admin_cancel")
 
     return builder.as_markup()
 

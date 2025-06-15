@@ -18,6 +18,7 @@ venv.bak/
 dist/
 build/
 temp/
+test/
 
 # PyInstaller
 *.manifest
@@ -67,3 +68,4 @@ Thumbs.db
 
 #база данных
 main.sqlite3
+your_database.db
