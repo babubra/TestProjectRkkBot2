@@ -65,7 +65,7 @@ def get_limits_management_kb(default_limit: int) -> InlineKeyboardMarkup:
 
     builder = InlineKeyboardBuilder()
     builder.button(
-        text=f"📊 Лимиты по умолчанию ({default_limit})",
+        text=f"📊 Изменить лимит по умолчанию ({default_limit})",
         callback_data="admin_limits_default",
     )
     builder.button(
@@ -73,5 +73,5 @@ def get_limits_management_kb(default_limit: int) -> InlineKeyboardMarkup:
         callback_data="admin_limits_date",
     )
     builder.button(text="❌ Отмена", callback_data="admin_cancel")
-    builder.adjust(2, 1)
+    builder.adjust(1)
     return builder.as_markup()
