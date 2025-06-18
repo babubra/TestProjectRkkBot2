@@ -63,6 +63,14 @@ class SetDateLimitFSM(StatesGroup):
     waiting_for_limit_value = State()
 
 
+class ViewDateLimitFSM(StatesGroup):
+    """
+    Машина состояний для просмотра установленных лимитов на выбранные даты.
+    """
+
+    waiting_for_date_range_to_view = State()
+
+
 ROLES_MAP = {
     "USER_ROLE_PERMISSIONS": USER_ROLE_PERMISSIONS,
     "MANAGER_ROLE_PERMISSIONS": MANAGER_ROLE_PERMISSIONS,
@@ -157,7 +165,10 @@ async def get_ticket_limit_menu_message(
         raise TypeError("Аргумент должен быть Message или CallbackQuery")
 
 
-@admin_router.callback_query(F.data == "admin_cancel")
+@admin_router.callback_query(
+    F.data == "admin_cancel",
+    HasPermissionFilter([Permission.MANAGE_USERS, Permission.SET_TRIP_LIMITS]),
+)
 async def cancel_cmd(query: CallbackQuery, state: FSMContext):
     await state.clear()
     await get_admin_menu_message(query)
@@ -592,3 +603,76 @@ async def process_limit_for_date(message: Message, state: FSMContext, session: A
     # Завершаем FSM и показываем обновленное меню
     await state.clear()
     await get_ticket_limit_menu_message(message, session=session)
+
+
+@admin_router.callback_query(
+    F.data == "admin_limits_view", HasPermissionFilter(Permission.SET_TRIP_LIMITS)
+)
+async def view_date_limit_start(query: CallbackQuery, state: FSMContext):
+    """Шаг 1: Запрашивает дату или диапазон для просмотра."""
+    await query.answer()
+    await state.clear()
+
+    instruction_text = (
+        "🔍 <b>Просмотр лимитов</b> 🔍\n\n"
+        "Введите дату или диапазон дат (не более 31 дня) в формате <code>ДД.ММ.ГГГГ</code>.\n\n"
+        "<b>Примеры:</b>\n"
+        "• Одна дата: <code>25.12.2025</code>\n"
+        "• Диапазон: <code>01.01.2026-15.01.2026</code>"
+    )
+    await query.message.answer(instruction_text, reply_markup=get_cancel_kb())
+    await state.set_state(ViewDateLimitFSM.waiting_for_date_range_to_view)
+
+
+@admin_router.message(
+    ViewDateLimitFSM.waiting_for_date_range_to_view,
+    F.text,
+    HasPermissionFilter(Permission.SET_TRIP_LIMITS),
+)
+async def process_date_range_for_view(
+    message: Message, state: FSMContext, session: AsyncSession
+):
+    """Шаг 2: Валидирует диапазон, получает данные из БД и выводит результат."""
+    date_text = message.text.strip()
+    try:
+        if "-" in date_text:
+            start_str, end_str = date_text.split("-")
+            start_date = datetime.strptime(start_str.strip(), "%d.%m.%Y").date()
+            end_date = datetime.strptime(end_str.strip(), "%d.%m.%Y").date()
+            if start_date > end_date:
+                await message.answer(
+                    "❌ <b>Ошибка:</b> Начальная дата не может быть позже конечной."
+                )
+                return
+            if (end_date - start_date).days > 30:
+                await message.answer("❌ <b>Ошибка:</b> Диапазон не может превышать 31 день.")
+                return
+        else:
+            start_date = end_date = datetime.strptime(date_text, "%d.%m.%Y").date()
+    except ValueError:
+        await message.answer("❌ <b>Ошибка формата!</b> Используйте <code>ДД.ММ.ГГГГ</code>.")
+        return
+
+    # Получаем лимиты для диапазона
+    day_names_ru = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+    results = []
+    app_settings = await crud.get_app_settings(session)
+    default_limit = app_settings.default_daily_limit
+
+    current_date = start_date
+    while current_date <= end_date:
+        actual_limit = await crud.get_actual_limit_for_date(session, current_date)
+        day_name = day_names_ru[current_date.weekday()]
+        date_str = current_date.strftime("%d.%m.%Y")
+        override_marker = " ✨" if actual_limit != default_limit else ""
+        results.append(f"{day_name}, {date_str}: <b>{actual_limit}</b>{override_marker}")
+        current_date += timedelta(days=1)
+
+    # Вывод результата
+    results_text = "\n".join(results)
+    final_message = f"📊 <b>Лимиты на выбранный период:</b>\n\n{results_text}"
+    await message.answer(final_message)
+
+    # Завершаем FSM и возвращаемся в меню лимитов
+    await state.clear()
+    await get_ticket_limit_menu_message(message, session)

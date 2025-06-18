@@ -1,10 +1,14 @@
-import json
-import httpx
 import asyncio
+import json
 import logging
+import urllib
 from datetime import datetime, timedelta, timezone
 
-import urllib
+import httpx
+from pydantic import ValidationError
+
+from .schemas import Deal
+
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +29,7 @@ class CRMClient:
         self._access_token: str | None = None
         self._token_expires_at: datetime | None = None
         self._client_session: httpx.AsyncClient | None = None
-        self._lock = (
-            asyncio.Lock()
-        )  # Для предотвращения одновременного обновления токена
+        self._lock = asyncio.Lock()  # Для предотвращения одновременного обновления токена
 
     async def _get_client_session(self) -> httpx.AsyncClient:
         if self._client_session is None or self._client_session.is_closed:
@@ -50,9 +52,7 @@ class CRMClient:
         }
 
         try:
-            logger.info(
-                f"Попытка аутентификации в CRM для пользователя {self.username}..."
-            )
+            logger.info(f"Попытка аутентификации в CRM для пользователя {self.username}...")
             response = await session.post(auth_url_path, data=form_data)
             response.raise_for_status()  # Выбросит исключение для HTTP-ошибок 4xx/5xx
 
@@ -64,9 +64,7 @@ class CRMClient:
                 self._token_expires_at = None
                 return False
 
-            expires_in = token_data.get(
-                "expires_in", 3600
-            )  # Время жизни токена в секундах
+            expires_in = token_data.get("expires_in", 3600)  # Время жизни токена в секундах
             # Устанавливаем время истечения с небольшим запасом (например, 60 секунд)
             # Используем timezone.utc для корректной работы с временем
             buffer_seconds = 60
@@ -224,9 +222,7 @@ class CRMClient:
                     "value": {
                         "contentType": "DateOnly",
                         "year": int(visit_date.year),
-                        "month": int(
-                            visit_date.month - 1
-                        ),  # Мегаплан ожидает месяц 0-11
+                        "month": int(visit_date.month - 1),  # Мегаплан ожидает месяц 0-11
                         "day": int(visit_date.day),
                     },
                 }
@@ -307,9 +303,7 @@ class CRMClient:
             json_payload_str = json.dumps(deal_payload)
             encoded_query_string = urllib.parse.quote(json_payload_str)
         except Exception as e:
-            logger.error(
-                f"Ошибка при сериализации или кодировании payload для сделок: {e}"
-            )
+            logger.error(f"Ошибка при сериализации или кодировании payload для сделок: {e}")
             return None
 
         endpoint_with_query = f"/api/v3/deal?{encoded_query_string}"
@@ -339,11 +333,7 @@ class CRMClient:
             executors_in_deal = deal.get("Category1000076CustomFieldViezdIspolnitel")
             if isinstance(executors_in_deal, list):
                 for executor in executors_in_deal:
-                    if (
-                        isinstance(executor, dict)
-                        and "id" in executor
-                        and "name" in executor
-                    ):
+                    if isinstance(executor, dict) and "id" in executor and "name" in executor:
                         # Сохраняем полную информацию, если есть 'name'
                         executors_cache[executor["id"]] = executor
 
@@ -370,9 +360,7 @@ class CRMClient:
                         updated_executors_list.append(
                             executor
                         )  # Если есть 'name' или не словарь/нет 'id'
-                deal["Category1000076CustomFieldViezdIspolnitel"] = (
-                    updated_executors_list
-                )
+                deal["Category1000076CustomFieldViezdIspolnitel"] = updated_executors_list
 
         return deals
 
@@ -401,9 +389,7 @@ class CRMClient:
         Returns:
             Dict[str, Any] | None: Данные созданной сделки или None в случае ошибки.
         """
-        logger.info(
-            f"Попытка создания сделки с названием: {name if name else 'Без названия'}"
-        )
+        logger.info(f"Попытка создания сделки с названием: {name if name else 'Без названия'}")
 
         deal_payload: dict[str, any] = {
             "contentType": "Deal",
@@ -426,9 +412,7 @@ class CRMClient:
                 or ticket_visit_datetime.tzinfo.utcoffset(ticket_visit_datetime) is None
             ):
                 # Наивный datetime, делаем его "осведомленным" для UTC+2
-                aware_local_dt = ticket_visit_datetime.replace(
-                    tzinfo=user_local_timezone
-                )
+                aware_local_dt = ticket_visit_datetime.replace(tzinfo=user_local_timezone)
             else:
                 # Уже "осведомленный", приведем его к вашему UTC+2 для единообразия перед конвертацией в UTC
                 aware_local_dt = ticket_visit_datetime.astimezone(user_local_timezone)
@@ -453,9 +437,7 @@ class CRMClient:
             )
 
         if address_to_visit is not None:
-            deal_payload["Category1000076CustomFieldPredmetRabotAdres"] = (
-                address_to_visit
-            )
+            deal_payload["Category1000076CustomFieldPredmetRabotAdres"] = address_to_visit
 
         # Выполняем POST-запрос для создания сделки
         response_data = await self._request(
@@ -656,12 +638,243 @@ class CRMClient:
     ) -> bool:
         """
         Прикрепляет файлы к основному полю аттачей сделки ('attaches').
-        Уточните регистр имени поля "attaches" или "Attaches" согласно API.
         """
-        field_name = "attaches"  # Используем нижний регистр. Если API Мегаплана требует "Attaches", измените.
+        field_name = "attaches"
         logger.info(
             f"Вызов attach_files_to_deal_main_attachments для сделки ID: {deal_id}, файлы: {file_ids}"
         )
         return await self._generic_attach_files_to_deal_field(
             deal_id=deal_id, field_name=field_name, file_ids=file_ids
         )
+
+    async def get_deals_for_date_range(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        executor_id: str | None = None,
+        limit: int = 200,  # Лимит по умолчанию выше, т.к. запрашиваем диапазон
+    ) -> list[dict[str, any]] | None:
+        """
+        Асинхронно получает список сделок из Мегаплана за ДИАПАЗОН ДАТ (включительно).
+        """
+        if start_date > end_date:
+            logger.error("Начальная дата не может быть позже конечной.")
+            raise ValueError("Начальная дата не может быть позже конечной.")
+
+        # 1. Формирование тела запроса (payload) для Мегаплана
+        deal_payload = {
+            "filter": {
+                "contentType": "TradeFilter",
+                "id": None,
+                "program": {"id": self.program_id, "contentType": "Program"},
+            },
+            "limit": limit,
+            "onlyRequestedFields": True,
+            "sortBy": [
+                {
+                    "contentType": "SortField",
+                    "fieldName": "Category1000076CustomFieldViezdDataVremyaViezda",
+                    "desc": False,
+                }
+            ],
+        }
+
+        filter_terms = []
+
+        filter_terms.append(
+            {
+                "contentType": "FilterTermDate",
+                "field": "Category1000076CustomFieldViezdDataVremyaViezda",
+                "comparison": "equals",  # Для интервала используется "equals"
+                "value": {
+                    "contentType": "IntervalDates",
+                    "from": {
+                        "contentType": "DateOnly",
+                        "year": start_date.year,
+                        "month": start_date.month - 1,  # Мегаплан ожидает месяц 0-11
+                        "day": start_date.day,
+                    },
+                    "to": {
+                        "contentType": "DateOnly",
+                        "year": end_date.year,
+                        "month": end_date.month - 1,
+                        "day": end_date.day,
+                    },
+                },
+            }
+        )
+
+        if executor_id:
+            filter_terms.append(
+                {
+                    "contentType": "FilterTermRef",
+                    "field": "Category1000076CustomFieldViezdIspolnitel",
+                    "comparison": "equals",
+                    "value": [{"id": executor_id, "contentType": "Employee"}],
+                }
+            )
+
+        excluded_status_ids = [202]
+        filter_terms.append(
+            {
+                "contentType": "FilterTermRef",
+                "field": "state",
+                "comparison": "not_equals",
+                "value": [
+                    {"id": status_id, "contentType": "ProgramState"}
+                    for status_id in excluded_status_ids
+                ],
+            }
+        )
+
+        if filter_terms:
+            deal_payload["filter"]["config"] = {
+                "contentType": "FilterConfig",
+                "termGroup": {
+                    "contentType": "FilterTermGroup",
+                    "join": "and",
+                    "terms": filter_terms,
+                },
+            }
+
+        fields_to_request = [
+            "editableFields",
+            "possibleActions",
+            "Category1000076CustomFieldPredmetRabotAdres",
+            "Category1000076CustomFieldPredmetRabotKadastroviyNomer",
+            "Category1000076CustomFieldViezdDataVremyaViezda",
+            "Category1000076CustomFieldViezdIspolnitel",
+            "Category1000076CustomFieldViezdFayliDlyaViezda",
+            "Category1000076CustomFieldSluzhebniyTelegramuserid",
+            {
+                "contractor": [
+                    "avatar",
+                    "canSeeFull",
+                    "firstName",
+                    "lastName",
+                    "middleName",
+                    "name",
+                    "type",
+                    "contactInfo",
+                ]
+            },
+            "description",
+            "isFavorite",
+            "name",
+            "nearTodo",
+            "number",
+            "price",
+            "program",
+            "state",
+            "tags",
+            "tagsCount",
+            "unreadCommentsCount",
+        ]
+        deal_payload["fields"] = fields_to_request
+
+        try:
+            json_payload_str = json.dumps(deal_payload)
+            encoded_query_string = urllib.parse.quote(json_payload_str)
+        except Exception as e:
+            logger.error(f"Ошибка при сериализации или кодировании payload для сделок: {e}")
+            return None
+
+        endpoint_with_query = f"/api/v3/deal?{encoded_query_string}"
+        response_json = await self._request("GET", endpoint_with_query)
+
+        if (
+            not response_json
+            or "data" not in response_json
+            or not isinstance(response_json["data"], list)
+        ):
+            logger.error(
+                f"Неожиданный формат ответа от API Мегаплана (отсутствует 'data' или это не список): {response_json}"
+            )
+            return None
+
+        deals: list[dict[str, any]] = response_json["data"]
+        logger.info(
+            f"Получено {len(deals)} сделок из Мегаплана за диапазон {start_date.date()} - {end_date.date()}."
+        )
+
+        # Обогащение данных об исполнителях (логика идентична get_deals)
+        executors_cache: dict[str, dict[str, any]] = {}
+        for deal in deals:
+            executors_in_deal = deal.get("Category1000076CustomFieldViezdIspolnitel")
+            if isinstance(executors_in_deal, list):
+                for executor in executors_in_deal:
+                    if isinstance(executor, dict) and "id" in executor and "name" in executor:
+                        executors_cache[executor["id"]] = executor
+
+        for deal in deals:
+            executors_in_deal = deal.get("Category1000076CustomFieldViezdIspolnitel")
+            if isinstance(executors_in_deal, list):
+                updated_executors_list = []
+                for executor in executors_in_deal:
+                    if (
+                        isinstance(executor, dict)
+                        and "id" in executor
+                        and "name" not in executor
+                    ):
+                        cached_executor = executors_cache.get(executor["id"])
+                        if cached_executor:
+                            updated_executors_list.append(cached_executor)
+                        else:
+                            updated_executors_list.append(executor)
+                    else:
+                        updated_executors_list.append(executor)
+                deal["Category1000076CustomFieldViezdIspolnitel"] = updated_executors_list
+        return deals
+
+    async def get_deals_model(
+        self,
+        visit_date: datetime | None = None,
+        executor_id: str | None = None,
+        limit: int = 25,
+    ) -> list[Deal] | None:
+        """
+        Асинхронно получает список сделок, обогащает данные и
+        возвращает список типизированных объектов Deal.
+        """
+        raw_deals = await self.get_deals(
+            visit_date=visit_date, executor_id=executor_id, limit=limit
+        )
+        if raw_deals is None:
+            return None
+
+        try:
+            deals = [Deal.model_validate(deal_data) for deal_data in raw_deals]
+            logger.debug(f"Успешно спарсено {len(deals)} сделок в Pydantic модели.")
+            return deals
+        except ValidationError as e:
+            logger.error(f"Ошибка валидации Pydantic при получении сделок: {e}")
+            return None
+
+    async def get_deals_for_date_range_model(
+        self,
+        start_date: datetime,
+        end_date: datetime,
+        executor_id: str | None = None,
+        limit: int = 1000,
+    ) -> list[Deal] | None:
+        """
+        Асинхронно получает список сделок за диапазон дат, обогащает данные и
+        возвращает список типизированных объектов Deal.
+        """
+        raw_deals = await self.get_deals_for_date_range(
+            start_date=start_date, end_date=end_date, executor_id=executor_id, limit=limit
+        )
+
+        if raw_deals is None:
+            return None
+
+        try:
+            deals = [Deal.model_validate(deal_data) for deal_data in raw_deals]
+            logger.info(
+                f"Успешно спарсено {len(deals)} сделок в Pydantic модели "
+                f"за диапазон {start_date.date()} - {end_date.date()}."
+            )
+            return deals
+        except ValidationError as e:
+            logger.error(f"Ошибка валидации Pydantic при получении сделок для диапазона: {e}")
+            return None
