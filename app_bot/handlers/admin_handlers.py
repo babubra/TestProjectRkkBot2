@@ -38,14 +38,6 @@ class CreateUserFSM(StatesGroup):
     waiting_for_user_data = State()
 
 
-class EditUserFSM(StatesGroup):
-    """
-    Машина состояний для процесса редактирования пользователя.
-    """
-
-    waiting_for_new_data = State()
-
-
 class SetDefaultLimitFSM(StatesGroup):
     """
     Машина состояний для процесса установки нового лимита по умолчанию.
