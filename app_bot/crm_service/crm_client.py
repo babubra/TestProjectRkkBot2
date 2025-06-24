@@ -794,7 +794,7 @@ class CRMClient:
 
         deals: list[dict[str, any]] = response_json["data"]
         logger.info(
-            f"Получено {len(deals)} сделок из Мегаплана за диапазон {start_date.date()} - {end_date.date()}."
+            f"Получено {len(deals)} сделок из Мегаплана за диапазон {start_date} - {end_date}."
         )
 
         # Обогащение данных об исполнителях (логика идентична get_deals)
@@ -872,7 +872,7 @@ class CRMClient:
             deals = [Deal.model_validate(deal_data) for deal_data in raw_deals]
             logger.info(
                 f"Успешно спарсено {len(deals)} сделок в Pydantic модели "
-                f"за диапазон {start_date.date()} - {end_date.date()}."
+                f"за диапазон {start_date} - {end_date}."
             )
             return deals
         except ValidationError as e:

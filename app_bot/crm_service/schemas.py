@@ -41,17 +41,20 @@ class Contractor(BaseSchema):
     """Модель для клиента/контрагента."""
 
     id: str
-    first_name: str = Field(alias="firstName")
-    last_name: str = Field(alias="lastName")
+    # === ИЗМЕНЕНИЕ: Поля first_name и last_name теперь опциональны ===
+    first_name: str | None = Field(default=None, alias="firstName")
+    last_name: str | None = Field(default=None, alias="lastName")
     middle_name: str | None = Field(default=None, alias="middleName")
     contact_info: list[ContactInfo] = Field(alias="contactInfo", default_factory=list)
 
     @property
     def full_name(self) -> str:
-        """Собирает полное имя для удобства."""
-        return (
-            f"{self.last_name or ''} {self.first_name or ''} {self.middle_name or ''}".strip()
-        )
+        """
+        Собирает полное имя для удобства.
+        Теперь корректно обрабатывает None.
+        """
+        parts = [self.last_name, self.first_name, self.middle_name]
+        return " ".join(part for part in parts if part)
 
 
 class Money(BaseSchema):
@@ -65,7 +68,7 @@ class StateInfo(BaseSchema):
     """Информация о статусе сделки."""
 
     id: str
-    name: str | None = None  # <--- ИЗМЕНЕНИЕ: Поле сделано опциональным
+    name: str | None = None
     color: str | None = None
 
 

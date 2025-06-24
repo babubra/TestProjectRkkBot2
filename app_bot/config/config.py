@@ -16,6 +16,7 @@ class EnvSettings(BaseSettings):
     MEGAPLAN_LOGIN: str
     MEGAPLAN_PASSWORD: str
     MEGAPLAN_PROGRAM_ID: int
+    APP_TIMEZONE_OFFSET: int
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -24,7 +25,7 @@ class EnvSettings(BaseSettings):
     )
 
 
-@lru_cache()
+@lru_cache
 def get_env_settings() -> EnvSettings:
     """
     Функция для получения единственного экземпляра настроек (Singleton).
