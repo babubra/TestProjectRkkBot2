@@ -19,11 +19,14 @@ from app_bot.database import crud
 from app_bot.database.models import Permission
 from app_bot.filters.permission_filters import HasPermissionFilter
 from app_bot.keyboards.admin_keyboards import (
+    DateLimitCallback,
     UserCallback,
     get_cancel_kb,
     get_limits_management_kb,
     get_user_management_kb,
+    get_view_limits_for_date_kb,
 )
+from app_bot.utils.admin_utils import fetch_holidays_from_url
 
 
 admin_router = Router()
@@ -63,6 +66,15 @@ class ViewDateLimitFSM(StatesGroup):
     waiting_for_date_range_to_view = State()
 
 
+class SetNonWorkingDaysFSM(StatesGroup):
+    """
+    Машина состояний для процесса установки нерабочих дней
+    по производственному календарю.
+    """
+
+    waiting_for_calendar_url = State()
+
+
 ROLES_MAP = {
     "USER_ROLE_PERMISSIONS": USER_ROLE_PERMISSIONS,
     "MANAGER_ROLE_PERMISSIONS": MANAGER_ROLE_PERMISSIONS,
@@ -87,11 +99,13 @@ async def get_admin_menu_message(event: Message | CallbackQuery) -> None:
         "👤 /create_user – Создание нового пользователя\n"
         "📋 /users_list – Просмотр всех пользователей\n\n"
         "📊 /ticket_limits – Управление лимитами заявок\n\n"
-        "🏠 /start – Главное меню"
+        "🏠 /start – Главное меню\n\n"
+        "---------------------------------\n\n"
+        "📊 /fill_not_working_days_for_limit – Установить выходные и праздничные дни из производственного календаря.\n\n"
     )
 
     if isinstance(event, Message):
-        await event.answer(text=instruction_text)
+        await event.answer(text=instruction_text, disable_web_page_preview=True)
     elif isinstance(event, CallbackQuery):
         # Закрываем progress-bar; текст ≤200 симв.[8]
         await event.answer()
@@ -396,33 +410,38 @@ async def ticket_limits_menu_cmd(message: Message, session: AsyncSession, state:
 
 
 @admin_router.callback_query(
-    F.data == "admin_limits_default", HasPermissionFilter(Permission.SET_TRIP_LIMITS)
+    F.data == "admin_limits_date", HasPermissionFilter(Permission.SET_TRIP_LIMITS)
 )
-async def set_default_limit_start(
-    query: CallbackQuery, state: FSMContext, session: AsyncSession
-):
+async def set_date_limit_start(query: CallbackQuery, session: AsyncSession):
     """
-    Обрабатывает нажатие на кнопку "Лимиты по умолчанию".
-    Запрашивает новое значение и переводит в состояние ожидания.
+    Показывает меню для выбора даты для редактирования лимита.
+    Сначала предлагает быстрый выбор из 7 дней с уже известными лимитами.
     """
-    # Сначала отвечаем на callback, чтобы убрать "часики"
     await query.answer()
 
-    # Получаем текущее значение лимита из БД
-    app_settings = await crud.get_app_settings(session)
-    current_limit = app_settings.default_daily_limit
+    # 1. Получаем лимиты для следующих 7 дней
+    limits_data = {}
+    today = date.today()
+    for i in range(7):
+        current_date = today + timedelta(days=i)
+        limit = await crud.get_actual_limit_for_date(session, current_date)
+        limits_data[current_date] = limit
 
-    prompt_text = (
-        f"Вы собираетесь изменить лимит по умолчанию.\n"
-        f"<b>Текущее значение: {current_limit}</b>\n\n"
-        f"Введите новое числовое значение и отправьте его в чат."
+    # 2. Получаем лимит по умолчанию, чтобы передать его в клавиатуру для сравнения
+    app_settings = await crud.get_app_settings(session)
+    default_limit = app_settings.default_daily_limit
+
+    # 3. Генерируем клавиатуру, передавая ей оба набора данных
+    kb = get_view_limits_for_date_kb(daily_limits=limits_data, default_limit=default_limit)
+
+    instruction_text = (
+        "🗓 <b>Редактирование лимита на дату</b> 🗓\n\n"
+        "Выберите дату для быстрого редактирования, или введите ее вручную.\n"
+        "<i>✨ - на дату установлен особый лимит.</i>"
     )
 
-    # Отправляем сообщение с запросом и клавиатурой отмены
-    await query.message.answer(text=prompt_text, reply_markup=get_cancel_kb())
-
-    # Устанавливаем состояние ожидания нового значения
-    await state.set_state(SetDefaultLimitFSM.waiting_for_new_limit)
+    # 4. Отправляем сообщение с новой клавиатурой
+    await query.message.answer(text=instruction_text, reply_markup=kb)
 
 
 @admin_router.message(
@@ -474,17 +493,17 @@ async def process_new_default_limit(message: Message, state: FSMContext, session
 
 
 @admin_router.callback_query(
-    F.data == "admin_limits_date", HasPermissionFilter(Permission.SET_TRIP_LIMITS)
+    F.data == "admin_limits_manual_input", HasPermissionFilter(Permission.SET_TRIP_LIMITS)
 )
-async def set_date_limit_start(query: CallbackQuery, state: FSMContext):
+async def set_date_limit_manual_input(query: CallbackQuery, state: FSMContext):
     """
-    Шаг 1: Запрашивает дату или диапазон дат.
+    Шаг 1 (ручной ввод): Запрашивает дату или диапазон дат.
     """
     await query.answer()
     await state.clear()
 
     instruction_text = (
-        "🗓 <b>Установка лимита на дату</b> 🗓\n\n"
+        "⌨️ <b>Ручной ввод лимита</b> ⌨️\n\n"
         "Введите дату или диапазон дат в формате <code>ДД.ММ.ГГГГ</code>.\n\n"
         "<b>Примеры:</b>\n"
         "• Одна дата: <code>25.12.2025</code>\n"
@@ -492,6 +511,44 @@ async def set_date_limit_start(query: CallbackQuery, state: FSMContext):
     )
     await query.message.answer(instruction_text, reply_markup=get_cancel_kb())
     await state.set_state(SetDateLimitFSM.waiting_for_date_range)
+
+
+@admin_router.callback_query(
+    DateLimitCallback.filter(F.action == "edit_limit"),
+    HasPermissionFilter(Permission.SET_TRIP_LIMITS),
+)
+async def process_date_from_callback(
+    query: CallbackQuery,
+    callback_data: DateLimitCallback,
+    state: FSMContext,
+    session: AsyncSession,
+):
+    """
+    Обрабатывает нажатие на кнопку с конкретной датой.
+    Извлекает дату, сохраняет ее в FSM и сразу запрашивает значение лимита.
+    """
+    await query.answer()
+
+    # 1. Получаем дату из callback_data
+    target_date = date.fromisoformat(callback_data.date_iso)
+
+    # 2. Сохраняем дату в FSM для следующего шага
+    #    process_limit_for_date ожидает 'start_date' и 'end_date'
+    await state.update_data(start_date=target_date, end_date=target_date)
+
+    # 3. Устанавливаем FSM в состояние ожидания лимита
+    await state.set_state(SetDateLimitFSM.waiting_for_limit_value)
+
+    # 4. Получаем текущий лимит для информативного сообщения
+    current_limit = await crud.get_actual_limit_for_date(session, target_date)
+
+    # 5. Запрашиваем новое значение лимита у пользователя
+    prompt_text = (
+        f"Вы редактируете лимит для даты: <b>{target_date.strftime('%d.%m.%Y')}</b>.\n"
+        f"Текущий лимит: <code>{current_limit}</code>.\n\n"
+        "Введите новое числовое значение и отправьте его в чат."
+    )
+    await query.message.answer(text=prompt_text, reply_markup=get_cancel_kb())
 
 
 @admin_router.message(
@@ -668,3 +725,80 @@ async def process_date_range_for_view(
     # Завершаем FSM и возвращаемся в меню лимитов
     await state.clear()
     await get_ticket_limit_menu_message(message, session)
+
+
+@admin_router.message(
+    Command("fill_not_working_days_for_limit"), HasPermissionFilter(Permission.MANAGE_USERS)
+)
+async def fill_not_working_days_cmd(message: Message, session: AsyncSession, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "Введите ссылку из консультант плюс, на производственный календарь для нужного года. \n\n"
+        "Данные беруться по ссылке вида https://www.consultant.ru/law/ref/calendar/proizvodstvennye/2025/ \n\n"
+        "После выполнения этой команды, уже установленные лимиты на нерабочие дни будут перезаписаны и станут 0"
+    )
+    await state.set_state(SetNonWorkingDaysFSM.waiting_for_calendar_url)
+
+
+@admin_router.message(
+    SetNonWorkingDaysFSM.waiting_for_calendar_url,
+    F.text,
+    HasPermissionFilter(Permission.MANAGE_USERS),
+)
+async def process_calendar_url_cmd(message: Message, state: FSMContext, session: AsyncSession):
+    """
+    Этот хендлер получает ссылку на производственный календарь,
+    парсит её и устанавливает лимит 0 на все выходные и праздничные дни.
+    """
+    calendar_url = message.text.strip()
+    await message.answer(
+        f"Принял ссылку: {calendar_url}\nНачинаю обработку, это может занять некоторое время..."
+    )
+
+    try:
+        # 1. Вызываем утилиту для получения списка дат
+        holidays = await fetch_holidays_from_url(calendar_url)
+
+        if not holidays:
+            await message.answer(
+                "Не удалось найти нерабочие дни по указанной ссылке. Проверьте ссылку или содержимое страницы."
+            )
+            await state.clear()
+            await get_ticket_limit_menu_message(message, session=session)
+            return
+
+        await message.answer(
+            f"✅ Найдено {len(holidays)} нерабочих дней. Начинаю установку нулевых лимитов..."
+        )
+
+        # 2. Проходим по списку и устанавливаем лимит 0 для каждой даты
+        processed_count = 0
+        for holiday_date in holidays:
+            try:
+                await crud.set_daily_limit_override(session, target_date=holiday_date, limit=0)
+                processed_count += 1
+            except Exception as e:
+                logger.error(f"Не удалось установить лимит для даты {holiday_date}: {e}")
+                # Продолжаем со следующей датой
+                pass
+
+        # 3. Отправляем итоговый отчет
+        success_message = f"✅ Обработка завершена! Установлен нулевой лимит для {processed_count} из {len(holidays)} нерабочих дней."
+        if processed_count < len(holidays):
+            success_message += "\n❗️ Во время установки лимитов для некоторых дат произошли ошибки. Подробности в логах."
+
+        await message.answer(success_message)
+
+    except Exception as e:
+        logger.error(
+            f"Ошибка при обработке календаря по ссылке {calendar_url}: {e}", exc_info=True
+        )
+        await message.answer(
+            "❌ Произошла критическая ошибка при получении или обработке данных с сайта. "
+            "Проверьте ссылку и повторите попытку позже. Подробности в логах."
+        )
+    finally:
+        # В любом случае завершаем FSM
+        await state.clear()
+        # И возвращаемся в меню управления лимитами, чтобы показать обновленные данные.
+        await get_ticket_limit_menu_message(message, session=session)
