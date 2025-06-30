@@ -13,6 +13,7 @@ from .config.config import get_env_settings
 from .database.engine import DatabaseManager
 from .handlers.admin_handlers import admin_router
 from .handlers.common_handlers import common_router
+from .handlers.view_tickets_handlers import view_tickets_router
 
 
 logging.basicConfig(
@@ -46,6 +47,7 @@ async def main() -> None:
 
     dp.include_router(admin_router)
     dp.include_router(common_router)
+    dp.include_router(view_tickets_router)
 
     await bot.delete_webhook(drop_pending_updates=True)
 
