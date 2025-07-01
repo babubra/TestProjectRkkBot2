@@ -1,8 +1,14 @@
 # Файл: app_bot/crm_service/schemas.py
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from pydantic import BaseModel, Field, field_validator
+
+from app_bot.config.config import get_env_settings
+
+
+settings = get_env_settings()
+APP_TIMEZONE = timezone(timedelta(hours=settings.APP_TIMEZONE_OFFSET))
 
 
 class BaseSchema(BaseModel):
@@ -163,6 +169,26 @@ class Deal(BaseSchema):
         if isinstance(v, list):
             return [item["id"] for item in v if isinstance(item, dict) and "id" in item]
         return v
+
+    @field_validator("visit_datetime", mode="after")
+    @classmethod
+    def convert_to_local_timezone(cls, v: datetime | None):
+        """
+        Конвертирует datetime-объект в локальный часовой пояс приложения.
+        Выполняется ПОСЛЕ основной валидации, когда `v` уже является объектом datetime.
+        """
+        # Если значение отсутствует, ничего не делаем
+        if v is None:
+            return None
+
+        # Если объект уже имеет информацию о часовом поясе (а он будет иметь tzinfo=UTC),
+        # то конвертируем его в наш локальный пояс.
+        if v.tzinfo is not None:
+            return v.astimezone(APP_TIMEZONE)
+
+        # Запасной вариант: если бы дата пришла "наивной" (без tzinfo),
+        # мы бы присвоили ей наш локальный часовой пояс.
+        return v.replace(tzinfo=APP_TIMEZONE)
 
 
 class DealCreationSchema(BaseModel):

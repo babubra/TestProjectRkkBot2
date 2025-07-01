@@ -56,14 +56,12 @@ async def get_main_menu_message(message: Message, session: AsyncSession, crm_cli
             deals_today = [
                 deal
                 for deal in deals_for_period
-                if deal.visit_datetime
-                and deal.visit_datetime.astimezone(APP_TIMEZONE).date() == today
+                if deal.visit_datetime and deal.visit_datetime.date() == today
             ]
             deals_tomorrow = [
                 deal
                 for deal in deals_for_period
-                if deal.visit_datetime
-                and deal.visit_datetime.astimezone(APP_TIMEZONE).date() == tomorrow
+                if deal.visit_datetime and deal.visit_datetime.date() == tomorrow
             ]
 
         count_today = len(deals_today)
@@ -150,28 +148,27 @@ async def get_and_format_deals_from_crm(
         message_parts = []
 
         # --- 1. Формируем заголовок со ссылкой и датой ---
-        # Шаг 1: Получаем базовую иконку из статуса сделки
         icon = DEAL_STATUS_ICONS.get(deal.state.id, DEFAULT_STATUS_ICON)
-
-        # Шаг 2: Проверяем поле "Результат выезда"
-        # Pydantic-схема маппит Category1000076CustomFieldViezdRezultatViezda на deal.visit_result
         if deal.visit_result and isinstance(deal.visit_result, str):
-            # Убираем возможные пробелы в начале и проверяем, что строка не пустая
             stripped_result = deal.visit_result.strip()
             if stripped_result:
-                # Шаг 3: Добавляем первый символ из результата к нашей основной иконке
                 secondary_icon = stripped_result[0]
                 icon += secondary_icon
 
         deal_url = urljoin(crm_client.base_url, f"/deals/{deal.id}/card/")
-
         link_text = f"{icon} Сделка {deal.id}."
-
         header_link = f'<a href="{deal_url}">{link_text}</a>'
 
-        visit_date_str = (
-            f"<b>{deal.visit_datetime.strftime('%d.%m.%Y')}</b>" if deal.visit_datetime else ""
-        )
+        visit_date_str = ""
+        if deal.visit_datetime:
+            if deal.visit_datetime.time() == datetime.min.time():
+                # Время 00:00, показываем только дату
+                format_string = "%d.%m.%Y"
+            else:
+                # Показываем дату и время
+                format_string = "%d.%m.%Y %H:%M"
+
+            visit_date_str = f"<b>{deal.visit_datetime.strftime(format_string)}</b>"
 
         full_header = f"{header_link} {visit_date_str}".strip()
         message_parts.append(full_header)
@@ -179,7 +176,7 @@ async def get_and_format_deals_from_crm(
         # --- 2. Название сделки ---
         message_parts.append(f"<b>{deal.name}</b>")
 
-        # --- 3. Описание сделки (очищенное от HTML с сохранением переносов) ---
+        # --- 3. Описание сделки ---
         if deal.description:
             clean_description = strip_html_and_preserve_breaks(deal.description)
             if clean_description:
@@ -201,7 +198,7 @@ async def get_and_format_deals_from_crm(
             message_parts.append(f"<b>Файлы:</b>\n{files_str}")
 
         # --- Собираем все части в одно сообщение ---
-        final_message = "\n\n".join(message_parts)
+        final_message = "\n".join(message_parts)
         formatted_messages.append(final_message)
 
     return formatted_messages

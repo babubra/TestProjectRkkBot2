@@ -3,6 +3,7 @@ import json
 import logging
 import urllib
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import httpx
 from pydantic import ValidationError
@@ -138,12 +139,8 @@ class CRMClient:
             logger.error("Не удалось получить токен доступа для выполнения запроса.")
             return None
 
-        # === ИЗМЕНЕННЫЙ БЛОК: НАЧАЛО ===
-
         # Получаем настройки, чтобы узнать наш часовой пояс
         settings = get_env_settings()
-        # Вычисляем смещение в секундах. Ваш браузер отправляет -7200 для UTC+2.
-        # Это означает, что значение должно быть -(offset_в_часах * 3600).
         timezone_offset_seconds = -(settings.APP_TIMEZONE_OFFSET * 3600)
 
         # Формируем заголовки, добавляя ключевой заголовок x-time-zone
@@ -152,10 +149,7 @@ class CRMClient:
             "X-Time-Zone": str(timezone_offset_seconds),
         }
 
-        # === ИЗМЕНЕННЫЙ БЛОК: КОНЕЦ ===
-
         session = await self._get_client_session()
-        headers = {"Authorization": f"Bearer {token}"}
 
         try:
             logger.debug(
@@ -189,199 +183,58 @@ class CRMClient:
             logger.error(f"Непредвиденная ошибка при запросе к {endpoint}: {e}")
             return None
 
-    async def get_deals_for_day(
-        self,
-        visit_date: datetime | None = None,
-        executor_id: str | None = None,
-        limit: int = 25,
-    ) -> list[dict[str, any]] | None:
+    def _recursively_build_cache(self, data_structure: Any, cache: dict[str, dict]) -> None:
         """
-        Асинхронно получает список сделок из Мегаплана с возможностью фильтрации.
-        Обеспечивает заполнение полных данных об исполнителях.
-
-        Args:
-            visit_date (datetime, optional): Дата выезда для фильтрации.
-            executor_id (str, optional): ID исполнителя для фильтрации.
-            limit (int, optional): Ограничение на количество возвращаемых сделок.
-
-        Returns:
-            list: Список сделок или None в случае ошибки.
+        Рекурсивно обходит структуру данных (dict, list) и находит все
+        ПОЛНЫЕ объекты Employee для наполнения кэша.
         """
+        if isinstance(data_structure, dict):
+            # Если текущий узел - это полный объект сотрудника, кэшируем его
+            if (
+                data_structure.get("contentType") == "Employee"
+                and "id" in data_structure
+                and "name" in data_structure
+            ):
+                cache[data_structure["id"]] = data_structure
 
-        # 1. Формирование тела запроса (payload) для Мегаплана
-        deal_payload = {
-            "filter": {
-                "contentType": "TradeFilter",
-                "id": None,
-                "program": {
-                    "id": self.program_id,
-                    "contentType": "Program",
-                },
-            },
-            "limit": limit,
-            "onlyRequestedFields": True,
-            "sortBy": [
-                {
-                    "contentType": "SortField",
-                    "fieldName": "Category1000076CustomFieldViezdIspolnitel",
-                    "desc": False,
-                }
-            ],
-        }
+            # Продолжаем обход вглубь словаря
+            for value in data_structure.values():
+                self._recursively_build_cache(value, cache)
 
-        filter_terms = []
+        elif isinstance(data_structure, list):
+            # Продолжаем обход для каждого элемента списка
+            for item in data_structure:
+                self._recursively_build_cache(item, cache)
 
-        if visit_date:
-            filter_terms.append(
-                {
-                    "contentType": "FilterTermDate",
-                    "field": "Category1000076CustomFieldViezdDataVremyaViezda",
-                    "comparison": "equals",
-                    "value": {
-                        "contentType": "DateOnly",
-                        "year": int(visit_date.year),
-                        "month": int(visit_date.month - 1),  # Мегаплан ожидает месяц 0-11
-                        "day": int(visit_date.day),
-                    },
-                }
-            )
+    def _recursively_enrich_employees(
+        self, data_structure: Any, cache: dict[str, dict]
+    ) -> None:
+        """
+        Рекурсивно обходит структуру и заменяет НЕПОЛНЫЕ объекты Employee
+        данными из кэша.
+        """
+        if isinstance(data_structure, dict):
+            # Если текущий узел - это неполный объект сотрудника, который есть в кэше
+            if (
+                data_structure.get("contentType") == "Employee"
+                and "id" in data_structure
+                and "name" not in data_structure  # Ключевое условие - 'name' отсутствует
+                and data_structure["id"] in cache
+            ):
+                # Обогащаем/заменяем неполные данные полными из кэша
+                full_employee_data = cache[data_structure["id"]]
+                data_structure.update(full_employee_data)
+                # После обогащения нет смысла идти вглубь этого объекта
+                return
 
-        if executor_id:
-            filter_terms.append(
-                {
-                    "contentType": "FilterTermRef",
-                    "field": "Category1000076CustomFieldViezdIspolnitel",
-                    "comparison": "equals",
-                    "value": [{"id": executor_id, "contentType": "Employee"}],
-                }
-            )
+            # Если это не объект для обогащения, продолжаем обход вглубь
+            for value in data_structure.values():
+                self._recursively_enrich_employees(value, cache)
 
-        # Исключение статусов 202 - 🚫 Работа над процессом прекращена
-        excluded_status_ids = [202]
-        filter_terms.append(
-            {
-                "contentType": "FilterTermRef",
-                "field": "state",
-                "comparison": "not_equals",
-                "value": [
-                    {"id": status_id, "contentType": "ProgramState"}
-                    for status_id in excluded_status_ids
-                ],
-            }
-        )
-
-        if filter_terms:
-            deal_payload["filter"]["config"] = {
-                "contentType": "FilterConfig",
-                "termGroup": {
-                    "contentType": "FilterTermGroup",
-                    "join": "and",
-                    "terms": filter_terms,
-                },
-            }
-
-        fields_to_request = [
-            "editableFields",
-            "possibleActions",
-            "Category1000076CustomFieldPredmetRabotAdres",
-            "Category1000076CustomFieldPredmetRabotKadastroviyNomer",
-            "Category1000076CustomFieldViezdDataVremyaViezda",
-            "Category1000076CustomFieldViezdIspolnitel",
-            "Category1000076CustomFieldViezdFayliDlyaViezda",
-            "Category1000076CustomFieldSluzhebniyTelegramuserid",
-            "Category1000076CustomFieldViezdRezultatViezda",
-            {
-                "contractor": [
-                    "avatar",
-                    "canSeeFull",
-                    "firstName",
-                    "lastName",
-                    "middleName",
-                    "name",
-                    "type",
-                    "contactInfo",
-                ]
-            },
-            "description",
-            "isFavorite",
-            "name",
-            "nearTodo",
-            "number",
-            "price",
-            "program",
-            "state",
-            "tags",
-            "tagsCount",
-            "unreadCommentsCount",
-        ]
-        deal_payload["fields"] = fields_to_request
-
-        # 2. Формирование URL с закодированным JSON в строке запроса
-        try:
-            # Сериализуем в JSON и затем URL-кодируем строку
-            json_payload_str = json.dumps(deal_payload)
-            encoded_query_string = urllib.parse.quote(json_payload_str)
-        except Exception as e:
-            logger.error(f"Ошибка при сериализации или кодировании payload для сделок: {e}")
-            return None
-
-        endpoint_with_query = f"/api/v3/deal?{encoded_query_string}"
-
-        # 3. Выполнение запроса через обертку _request
-        # Если это должен быть POST запрос с JSON в теле:
-        response_json = await self._request("GET", endpoint_with_query)
-
-        if not response_json:
-            # Ошибка уже залогирована в _request
-            return None
-
-        if "data" not in response_json or not isinstance(response_json["data"], list):
-            logger.error(
-                f"Неожиданный формат ответа от API Мегаплана (отсутствует 'data' или это не список): {response_json}"
-            )
-            return None
-
-        deals: list[dict[str, any]] = response_json["data"]
-        logger.debug(f"Получено {len(deals)} сделок из Мегаплана.")
-
-        # 4. Логика кеширования и обогащения данных об исполнителях
-        executors_cache: dict[str, dict[str, any]] = {}
-
-        # Первый проход: сбор полной информации об исполнителях
-        for deal in deals:
-            executors_in_deal = deal.get("Category1000076CustomFieldViezdIspolnitel")
-            if isinstance(executors_in_deal, list):
-                for executor in executors_in_deal:
-                    if isinstance(executor, dict) and "id" in executor and "name" in executor:
-                        # Сохраняем полную информацию, если есть 'name'
-                        executors_cache[executor["id"]] = executor
-
-        # Второй проход: обновление информации об исполнителях в сделках
-        for deal in deals:
-            executors_in_deal = deal.get("Category1000076CustomFieldViezdIspolnitel")
-            if isinstance(executors_in_deal, list):
-                updated_executors_list = []
-                for executor in executors_in_deal:
-                    if (
-                        isinstance(executor, dict)
-                        and "id" in executor
-                        and "name" not in executor
-                    ):
-                        # Если нет 'name', но есть 'id', пытаемся взять из кеша
-                        cached_executor = executors_cache.get(executor["id"])
-                        if cached_executor:
-                            updated_executors_list.append(cached_executor)
-                        else:
-                            updated_executors_list.append(
-                                executor
-                            )  # Оставляем как есть, если в кеше нет
-                    else:
-                        updated_executors_list.append(
-                            executor
-                        )  # Если есть 'name' или не словарь/нет 'id'
-                deal["Category1000076CustomFieldViezdIspolnitel"] = updated_executors_list
-
-        return deals
+        elif isinstance(data_structure, list):
+            # Обходим каждый элемент списка
+            for item in data_structure:
+                self._recursively_enrich_employees(item, cache)
 
     async def get_deals_for_date_range(
         self,
@@ -524,9 +377,7 @@ class CRMClient:
             or "data" not in response_json
             or not isinstance(response_json["data"], list)
         ):
-            logger.error(
-                f"Неожиданный формат ответа от API Мегаплана (отсутствует 'data' или это не список): {response_json}"
-            )
+            logger.error(f"Неожиданный формат ответа от API Мегаплана: {response_json}")
             return None
 
         deals: list[dict[str, any]] = response_json["data"]
@@ -534,33 +385,21 @@ class CRMClient:
             f"Получено {len(deals)} сделок из Мегаплана за диапазон {start_date} - {end_date}."
         )
 
-        # Обогащение данных об исполнителях (логика идентична get_deals)
+        # --- Этап 1: Рекурсивно строим кэш всех полных данных о сотрудниках ---
         executors_cache: dict[str, dict[str, any]] = {}
         for deal in deals:
-            executors_in_deal = deal.get("Category1000076CustomFieldViezdIspolnitel")
-            if isinstance(executors_in_deal, list):
-                for executor in executors_in_deal:
-                    if isinstance(executor, dict) and "id" in executor and "name" in executor:
-                        executors_cache[executor["id"]] = executor
+            self._recursively_build_cache(deal, executors_cache)
 
+        logger.debug(
+            f"Кэш исполнителей собран. Найдено {len(executors_cache)} уникальных сотрудников."
+        )
+
+        # --- Этап 2: Рекурсивно обогащаем все сделки данными из кэша ---
         for deal in deals:
-            executors_in_deal = deal.get("Category1000076CustomFieldViezdIspolnitel")
-            if isinstance(executors_in_deal, list):
-                updated_executors_list = []
-                for executor in executors_in_deal:
-                    if (
-                        isinstance(executor, dict)
-                        and "id" in executor
-                        and "name" not in executor
-                    ):
-                        cached_executor = executors_cache.get(executor["id"])
-                        if cached_executor:
-                            updated_executors_list.append(cached_executor)
-                        else:
-                            updated_executors_list.append(executor)
-                    else:
-                        updated_executors_list.append(executor)
-                deal["Category1000076CustomFieldViezdIspolnitel"] = updated_executors_list
+            self._recursively_enrich_employees(deal, executors_cache)
+
+        logger.debug("Обогащение данных по сотрудникам завершено.")
+
         return deals
 
     async def create_deal(
@@ -845,30 +684,6 @@ class CRMClient:
         return await self._generic_attach_files_to_deal_field(
             deal_id=deal_id, field_name=field_name, file_ids=file_ids
         )
-
-    async def get_deals_model(
-        self,
-        visit_date: datetime | None = None,
-        executor_id: str | None = None,
-        limit: int = 25,
-    ) -> list[Deal] | None:
-        """
-        Асинхронно получает список сделок, обогащает данные и
-        возвращает список типизированных объектов Deal.
-        """
-        raw_deals = await self.get_deals_for_day(
-            visit_date=visit_date, executor_id=executor_id, limit=limit
-        )
-        if raw_deals is None:
-            return None
-
-        try:
-            deals = [Deal.model_validate(deal_data) for deal_data in raw_deals]
-            logger.debug(f"Успешно спарсено {len(deals)} сделок в Pydantic модели.")
-            return deals
-        except ValidationError as e:
-            logger.error(f"Ошибка валидации Pydantic при получении сделок: {e}")
-            return None
 
     async def get_deals_for_date_range_model(
         self,
