@@ -10,6 +10,7 @@ from app_bot.config.config import get_env_settings
 from app_bot.crm_service.crm_client import CRMClient
 from app_bot.database import crud
 from app_bot.keyboards.common_keyboards import get_main_menu_kb
+from app_bot.keyboards.view_ticket_keyboards import get_deal_action_kb
 
 
 logger = logging.getLogger(__name__)
@@ -130,9 +131,10 @@ def strip_html_tags(text: str) -> str:
 
 async def get_and_format_deals_from_crm(
     crm_client: CRMClient, start_date: date, end_date: date
-) -> list[str]:
+) -> list[dict]:
     """
     Универсальная функция для получения и форматирования списка сделок за период.
+    Возвращает список словарей, где каждый словарь содержит 'text' и 'reply_markup'.
     """
     logger.info(f"Запрос и форматирование сделок для диапазона: {start_date} - {end_date}")
 
@@ -141,12 +143,13 @@ async def get_and_format_deals_from_crm(
     )
 
     if not deals:
-        return ["✅ На выбранную дату заявок не найдено."]
+        # Возвращаем словарь, чтобы соответствовать новому формату
+        return [{"text": "✅ На выбранную дату заявок не найдено.", "reply_markup": None}]
 
     formatted_messages = []
     for deal in deals:
         message_parts = []
-
+        # ... (весь ваш код по формированию message_parts остается без изменений) ...
         # --- 1. Формируем заголовок со ссылкой и датой ---
         icon = DEAL_STATUS_ICONS.get(deal.state.id, DEFAULT_STATUS_ICON)
         if deal.visit_result and isinstance(deal.visit_result, str):
@@ -162,12 +165,9 @@ async def get_and_format_deals_from_crm(
         visit_date_str = ""
         if deal.visit_datetime:
             if deal.visit_datetime.time() == datetime.min.time():
-                # Время 00:00, показываем только дату
                 format_string = "%d.%m.%Y"
             else:
-                # Показываем дату и время
                 format_string = "%d.%m.%Y %H:%M"
-
             visit_date_str = f"<b>{deal.visit_datetime.strftime(format_string)}</b>"
 
         full_header = f"{header_link} {visit_date_str}".strip()
@@ -197,8 +197,10 @@ async def get_and_format_deals_from_crm(
             files_str = "\n".join(file_links)
             message_parts.append(f"<b>Файлы:</b>\n{files_str}")
 
-        # --- Собираем все части в одно сообщение ---
         final_message = "\n".join(message_parts)
-        formatted_messages.append(final_message)
+
+        # --- Собираем клавиатуру и добавляем всё в итоговый список ---
+        keyboard = get_deal_action_kb(deal_id=deal.id)
+        formatted_messages.append({"text": final_message, "reply_markup": keyboard})
 
     return formatted_messages

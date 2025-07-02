@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # Импортируем роли и функции для работы с БД
 from app_bot.config.user_roles_config import (
     ADMIN_ROLE_PERMISSIONS,
+    GEODESIST_ROLE_PERMISSIONS,
     MANAGER_ROLE_PERMISSIONS,
     USER_ROLE_PERMISSIONS,
 )
@@ -79,6 +80,7 @@ ROLES_MAP = {
     "USER_ROLE_PERMISSIONS": USER_ROLE_PERMISSIONS,
     "MANAGER_ROLE_PERMISSIONS": MANAGER_ROLE_PERMISSIONS,
     "ADMIN_ROLE_PERMISSIONS": ADMIN_ROLE_PERMISSIONS,
+    "GEODESIST_ROLE_PERMISSIONS": GEODESIST_ROLE_PERMISSIONS,
 }
 
 
@@ -214,8 +216,10 @@ async def start_user_creation_cmd(message: Message, state: FSMContext):
         🔐 <b>Группа прав</b>
         └─ Выберите одну из ролей:
             • USER_ROLE_PERMISSIONS (создание и просмотр заявок)
-            • MANAGER_ROLE_PERMISSIONS (+ управление лимитами заявок)
-            • ADMIN_ROLE_PERMISSIONS (+ управление пользователями)
+            • GEODESIST_ROLE_PERMISSIONS (создание и просмотр заявок + добавлением файлов к сделкам)
+            • MANAGER_ROLE_PERMISSIONS (создание и просмотр заявок + управление лимитами заявок)
+            • ADMIN_ROLE_PERMISSIONS (все права)
+            
 
         Пример ввода:
         123456789

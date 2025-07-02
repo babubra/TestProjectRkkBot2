@@ -20,17 +20,22 @@ async def view_today_deals_handler(
     query: CallbackQuery, crm_client: CRMClient, session: AsyncSession
 ):
     await query.message.answer("Загружаю заявки на сегодня...")
+    await query.answer()
 
     today = datetime.now().date()
 
-    # 1. Вызываем функцию загрузки списка отформатированных заявок
+    # 1. Вызываем функцию загрузки, которая вернет список словарей
     messages_to_send = await get_and_format_deals_from_crm(
         crm_client=crm_client, start_date=today, end_date=today
     )
 
-    # 2. Отправляем все, что она вернула
-    for msg in messages_to_send:
-        await query.message.answer(text=msg, disable_web_page_preview=True)
+    # 2. Отправляем все, что она вернула, используя распаковку словаря
+    for item in messages_to_send:
+        await query.message.answer(
+            text=item["text"],
+            reply_markup=item["reply_markup"],
+            disable_web_page_preview=True,
+        )
 
     # 3. Возвращаем в главное меню
     await get_main_menu_message(query.message, session, crm_client)
@@ -40,23 +45,23 @@ async def view_today_deals_handler(
 async def view_tomorrow_deals_handler(
     query: CallbackQuery, crm_client: CRMClient, session: AsyncSession
 ):
-    """
-    Обрабатывает нажатие на кнопку "Заявки на завтра".
-    Запрашивает сделки на завтрашний день и отправляет их пользователю.
-    """
     await query.message.answer("Загружаю заявки на завтра...")
+    await query.answer()
 
-    # Определяем завтрашнюю дату
     tomorrow = datetime.now(APP_TIMEZONE).date() + timedelta(days=1)
 
-    # 1. Вызываем ту же универсальную функцию, но с датой завтрашнего дня
+    # 1. Вызываем ту же универсальную функцию
     messages_to_send = await get_and_format_deals_from_crm(
         crm_client=crm_client, start_date=tomorrow, end_date=tomorrow
     )
 
     # 2. Отправляем все, что она вернула
-    for msg in messages_to_send:
-        await query.message.answer(text=msg, disable_web_page_preview=True)
+    for item in messages_to_send:
+        await query.message.answer(
+            text=item["text"],
+            reply_markup=item["reply_markup"],
+            disable_web_page_preview=True,
+        )
 
     # 3. Возвращаем в главное меню
     await get_main_menu_message(query.message, session, crm_client)
