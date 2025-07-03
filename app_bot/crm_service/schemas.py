@@ -115,6 +115,9 @@ class Deal(BaseSchema):
     contractor: Contractor | None = None
     """Клиент/контрагент по сделке. Corresponds to JSON key: 'contractor'"""
 
+    attaches: list[FileInfo] = Field(default_factory=list)
+    """Основные файлы, прикрепленные к сделке. Corresponds to JSON key: 'attaches'"""
+
     # --- Поля с алиасами для кастомных полей Мегаплана ---
 
     address: str | None = Field(
@@ -142,10 +145,14 @@ class Deal(BaseSchema):
     )
     """Исполнители выезда. Corresponds to JSON key: 'Category1000076CustomFieldViezdIspolnitel'"""
 
-    visit_files: list[FileInfo] = Field(
+    files_for_visit: list[FileInfo] = Field(
         alias="Category1000076CustomFieldViezdFayliDlyaViezda", default_factory=list
     )
     """Файлы для выезда. Corresponds to JSON key: 'Category1000076CustomFieldViezdFayliDlyaViezda'"""
+    files_from_visit: list[FileInfo] = Field(
+        alias="Category1000076CustomFieldViezdDokumentiIFotoSViezda", default_factory=list
+    )
+    """Файлы для выезда. Corresponds to JSON key: 'Category1000076CustomFieldViezdDokumentiIFotoSViezda'"""
 
     telegram_user_ids: list[str] = Field(
         alias="Category1000076CustomFieldSluzhebniyTelegramuserid", default_factory=list

@@ -188,9 +188,9 @@ async def get_and_format_deals_from_crm(
             message_parts.append(f"<b>Исполнители:</b> {executor_names}")
 
         # --- 5. Файлы со ссылками ---
-        if deal.visit_files:
+        if deal.files_for_visit:
             file_links = []
-            for file in deal.visit_files:
+            for file in deal.files_for_visit:
                 file_url = urljoin(crm_client.base_url, f"{file.path}")
                 file_links.append(f'<a href="{file_url}">{file.name}</a>')
 

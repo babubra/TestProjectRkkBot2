@@ -402,6 +402,49 @@ class CRMClient:
 
         return deals
 
+    async def get_deal_by_id(self, deal_id: int | str) -> dict[str, Any] | None:
+        """
+        Асинхронно получает одну сделку по ее ID из Мегаплана.
+        Возвращает необработанный словарь данных сделки.
+        """
+        logger.info(f"Запрос сделки по ID: {deal_id}")
+        endpoint = f"/api/v3/deal/{deal_id}"
+
+        response_data = await self._request(method="GET", endpoint=endpoint)
+
+        if not response_data:
+            return None
+
+        if "data" in response_data and isinstance(response_data["data"], dict):
+            deal_data = response_data["data"]
+            # Выполняем обогащение данных по сотрудникам для консистентности
+            executors_cache: dict[str, dict[str, any]] = {}
+            self._recursively_build_cache(deal_data, executors_cache)
+            self._recursively_enrich_employees(deal_data, executors_cache)
+            logger.info(f"Сделка ID {deal_id} получена и обогащена.")
+            return deal_data
+        else:
+            logger.error(f"Неожиданный формат ответа для сделки ID {deal_id}: {response_data}")
+            return None
+
+    async def get_deal_by_id_model(self, deal_id: int | str) -> Deal | None:
+        """
+        Асинхронно получает одну сделку по ID и возвращает ее
+        в виде типизированного объекта Deal.
+        """
+        raw_deal = await self.get_deal_by_id(deal_id=deal_id)
+
+        if raw_deal is None:
+            return None
+
+        try:
+            deal_model = Deal.model_validate(raw_deal)
+            logger.info(f"Успешно спарсена сделка ID {deal_id} в Pydantic модель.")
+            return deal_model
+        except ValidationError as e:
+            logger.error(f"Ошибка валидации Pydantic для сделки ID {deal_id}: {e}")
+            return None
+
     async def create_deal(
         self,
         description: str | None = None,
@@ -619,6 +662,7 @@ class CRMClient:
             {"contentType": "File", "id": fid_str} for fid_str in current_file_ids_str
         ]
 
+        # TODO Этот payload перезапишет поле field_name полностью.
         # Payload для обновления сделки.
         # ВАЖНО: Этот payload перезапишет поле field_name полностью.
         # Если нужно ДОБАВИТЬ файлы к уже существующим, логика должна быть сложнее:
