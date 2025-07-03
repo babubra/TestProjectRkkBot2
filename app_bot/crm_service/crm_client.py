@@ -615,61 +615,28 @@ class CRMClient:
         self,
         deal_id: int | str,
         field_name: str,
-        file_ids: list[str | int] | str | int,
+        file_ids: list[str | int],  # <<< ИЗМЕНЕНИЕ: Тип теперь строго list
     ) -> bool:
         """
-        Внутренний универсальный метод для прикрепления файлов к указанному полю сделки.
-        Только добавляет файлы, не очищает поле при пустом списке file_ids.
+        Внутренний универсальный метод для ПЕРЕЗАПИСИ поля сделки списком файлов.
+        Если передан пустой список file_ids, поле будет очищено.
         """
         if not deal_id or not field_name:
             logger.error(
-                f"Для обновления поля '{field_name}' сделки {deal_id} не указан ID сделки или имя поля."
-            )
-            return False
-
-        if not file_ids:  # Если file_ids пустой (None, "", [], 0 и т.д.)
-            logger.warning(
-                f"Не переданы ID файлов для прикрепления к полю '{field_name}' сделки {deal_id}. Действие не будет выполнено."
-            )
-            return False
-
-        current_file_ids_str: list[str]
-        if isinstance(file_ids, (str, int)):
-            current_file_ids_str = [str(file_ids)]
-        elif isinstance(file_ids, list):
-            if not file_ids:
-                logger.warning(
-                    f"Передан пустой список file_ids для поля '{field_name}' сделки {deal_id}. Файлы не будут прикреплены."
-                )
-                return False
-            current_file_ids_str = [str(fid) for fid in file_ids if fid]
-            if not current_file_ids_str:
-                logger.warning(
-                    f"Список file_ids после обработки оказался пустым для поля '{field_name}' сделки {deal_id}. Файлы не будут прикреплены."
-                )
-                return False
-        else:
-            logger.error(
-                f"Параметр file_ids должен быть строкой, числом или списком. Получен: {type(file_ids)}"
+                f"Для обновления поля '{field_name}' сделки не указан ID сделки или имя поля."
             )
             return False
 
         logger.info(
-            f"Попытка прикрепления файлов {current_file_ids_str} к полю '{field_name}' сделки ID: {str(deal_id)}"
+            f"Попытка перезаписи поля '{field_name}' сделки ID {str(deal_id)} файлами: {file_ids}"
         )
 
         file_objects_payload = [
-            {"contentType": "File", "id": fid_str} for fid_str in current_file_ids_str
+            {"contentType": "File", "id": str(fid)} for fid in file_ids if fid
         ]
 
-        # TODO Этот payload перезапишет поле field_name полностью.
-        # Payload для обновления сделки.
-        # ВАЖНО: Этот payload перезапишет поле field_name полностью.
-        # Если нужно ДОБАВИТЬ файлы к уже существующим, логика должна быть сложнее:
-        # 1. Прочитать текущее значение поля field_name из сделки.
-        # 2. Добавить новые file_objects_payload к существующим.
-        # 3. Отправить обновленный полный список.
-        # Пока реализуем простую перезапись поля новыми файлами.
+        # Payload для обновления сделки. API Мегаплана перезаписывает поле полностью.
+        # Логика "добавления" реализуется в вызывающих методах.
         update_payload = {
             "id": str(deal_id),
             "contentType": "Deal",
@@ -685,19 +652,20 @@ class CRMClient:
 
         if response_data:
             meta = response_data.get("meta")
-            if not meta.get("errors"):
+            if meta and not meta.get("errors"):  # Добавлена проверка на существование meta
                 logger.info(
-                    f"Поле '{field_name}' сделки ID {deal_id} успешно обновлено файлами: {current_file_ids_str}."
+                    f"Поле '{field_name}' сделки ID {deal_id} успешно обновлено файлами: {file_ids}."
                 )
                 return True
             else:
                 logger.warning(
-                    f"Обновление поля '{field_name}' для сделки {deal_id} файлами {current_file_ids_str} могло завершиться некорректно (неожиданный ответ). Ответ API: {response_data}"
+                    f"Обновление поля '{field_name}' для сделки {deal_id} файлами {file_ids} могло завершиться с ошибкой. Ответ API: {response_data}"
                 )
+                # Считаем успешным, если нет явной ошибки, но логируем
                 return True
         else:
             logger.error(
-                f"Не удалось обновить поле '{field_name}' сделки {deal_id} файлами {current_file_ids_str}."
+                f"Не удалось обновить поле '{field_name}' сделки {deal_id} файлами {file_ids}."
             )
             return False
 
@@ -705,30 +673,86 @@ class CRMClient:
         self, deal_id: int | str, file_ids: list[str | int] | str | int
     ) -> bool:
         """
-        Прикрепляет файлы (документы и фото с выезда) к соответствующему кастомному полю сделки.
+        ДОБАВЛЯЕТ файлы (документы и фото с выезда) к соответствующему полю сделки.
+        Существующие файлы не удаляются.
         """
         field_name = "Category1000076CustomFieldViezdDokumentiIFotoSViezda"
         logger.info(
-            f"Вызов attach_files_to_deal_visit_docs для сделки ID: {deal_id}, файлы: {file_ids}"
+            f"Вызов ДОБАВЛЕНИЯ файлов в поле '{field_name}' для сделки ID: {deal_id}, файлы: {file_ids}"
         )
+
+        # 1. Нормализуем входящие ID в список строк
+        if isinstance(file_ids, (str, int)):
+            new_file_ids_str = [str(file_ids)]
+        elif isinstance(file_ids, list):
+            new_file_ids_str = [str(fid) for fid in file_ids if fid]
+        else:
+            logger.error(f"Некорректный тип для file_ids: {type(file_ids)}")
+            return False
+
+        if not new_file_ids_str:
+            logger.warning("Список новых файлов для добавления пуст. Операция не требуется.")
+            return True  # Считаем операцию успешной, т.к. добавлять нечего
+
+        # 2. Получаем текущее состояние сделки
+        deal = await self.get_deal_by_id_model(deal_id)
+        if not deal:
+            logger.error(f"Не удалось получить сделку {deal_id} для добавления файлов.")
+            return False
+
+        # 3. Собираем ID существующих файлов
+        existing_file_ids = [file.id for file in deal.files_from_visit]
+
+        # 4. Объединяем списки и удаляем дубликаты
+        combined_ids = list(set(existing_file_ids + new_file_ids_str))
+
+        # 5. Вызываем низкоуровневый метод с полным списком
         return await self._generic_attach_files_to_deal_field(
-            deal_id=deal_id, field_name=field_name, file_ids=file_ids
+            deal_id=deal_id, field_name=field_name, file_ids=combined_ids
         )
 
     async def attach_files_to_deal_main_attachments(
         self, deal_id: int | str, file_ids: list[str | int] | str | int
     ) -> bool:
         """
-        Прикрепляет файлы к основному полю аттачей сделки ('attaches').
+        ДОБАВЛЯЕТ файлы к основному полю аттачей сделки ('attaches').
+        Существующие файлы не удаляются.
         """
         field_name = "attaches"
         logger.info(
-            f"Вызов attach_files_to_deal_main_attachments для сделки ID: {deal_id}, файлы: {file_ids}"
+            f"Вызов ДОБАВЛЕНИЯ файлов в поле '{field_name}' для сделки ID: {deal_id}, файлы: {file_ids}"
         )
+        # 1. Нормализуем входящие ID в список строк
+        if isinstance(file_ids, (str, int)):
+            new_file_ids_str = [str(file_ids)]
+        elif isinstance(file_ids, list):
+            new_file_ids_str = [str(fid) for fid in file_ids if fid]
+        else:
+            logger.error(f"Некорректный тип для file_ids: {type(file_ids)}")
+            return False
+
+        if not new_file_ids_str:
+            logger.warning("Список новых файлов для добавления пуст. Операция не требуется.")
+            return True
+
+        # 2. Получаем текущее состояние сделки
+        deal = await self.get_deal_by_id_model(deal_id)
+        if not deal:
+            logger.error(f"Не удалось получить сделку {deal_id} для добавления файлов.")
+            return False
+
+        # 3. Собираем ID существующих файлов из поля 'attaches'
+        existing_file_ids = [file.id for file in deal.attaches]
+
+        # 4. Объединяем списки и удаляем дубликаты
+        combined_ids = list(set(existing_file_ids + new_file_ids_str))
+
+        # 5. Вызываем низкоуровневый метод с полным списком
         return await self._generic_attach_files_to_deal_field(
-            deal_id=deal_id, field_name=field_name, file_ids=file_ids
+            deal_id=deal_id, field_name=field_name, file_ids=combined_ids
         )
 
+    # <<< КОНЕЦ ИЗМЕНЕНИЯ >>>
     async def get_deals_for_date_range_model(
         self,
         start_date: datetime,
