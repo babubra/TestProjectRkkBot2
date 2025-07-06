@@ -17,8 +17,7 @@ venv.bak/
 *.egg-info/
 dist/
 build/
-temp/
-test/
+
 
 # PyInstaller
 *.manifest

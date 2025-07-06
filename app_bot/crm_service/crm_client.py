@@ -752,7 +752,6 @@ class CRMClient:
             deal_id=deal_id, field_name=field_name, file_ids=combined_ids
         )
 
-    # <<< КОНЕЦ ИЗМЕНЕНИЯ >>>
     async def get_deals_for_date_range_model(
         self,
         start_date: datetime,
