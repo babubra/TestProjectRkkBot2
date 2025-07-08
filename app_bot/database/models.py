@@ -27,9 +27,7 @@ class Base(DeclarativeBase):
     Содержит общие поля id, created_at, updated_at.
     """
 
-    id: Mapped[int] = mapped_column(
-        Integer, primary_key=True, index=True, autoincrement=True
-    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -45,15 +43,11 @@ class User(Base):
 
     __tablename__ = "bot_users"
 
-    username: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, unique=False
-    )
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=False)
     telegram_id: Mapped[int] = mapped_column(
         BigInteger, unique=True, index=True, nullable=False
     )
-    megaplan_user_id: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, unique=True
-    )
+    megaplan_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True)
 
     permissions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
 
@@ -80,8 +74,18 @@ class AppSettings(Base):
         Integer, nullable=False, default=10
     )  # Лимит по умолчанию = 10
 
+    default_brigades_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+
+    brigades_count: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=False)
+
     def __repr__(self) -> str:
-        return f"<AppSettings(id={self.id}, default_daily_limit={self.default_daily_limit})>"
+        return (
+            f"<AppSettings(id={self.id}, "
+            f"default_daily_limit={self.default_daily_limit}, "
+            f"default_brigades_count={self.default_brigades_count})>"
+        )
 
 
 class DailyLimitOverride(Base):
@@ -91,12 +95,12 @@ class DailyLimitOverride(Base):
 
     __tablename__ = "daily_limit_overrides"
 
-    limit_date: Mapped[date] = mapped_column(
-        Date, unique=True, index=True, nullable=False
-    )
-    daily_limit: Mapped[int] = mapped_column(
-        Integer, nullable=False
-    )  # Лимит для конкретной даты
+    limit_date: Mapped[date] = mapped_column(Date, unique=True, index=True, nullable=False)
+    daily_limit: Mapped[int] = mapped_column(Integer, nullable=False)
+    brigades_count: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=False)
 
     def __repr__(self) -> str:
-        return f"<DailyLimitOverride(id={self.id}, date={self.limit_date}, limit={self.daily_limit})>"
+        return (
+            f"<DailyLimitOverride(id={self.id}, date={self.limit_date}, "
+            f"limit={self.daily_limit}, brigades={self.brigades_count})>"
+        )

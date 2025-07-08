@@ -12,6 +12,7 @@ from app_bot.middlewares.db_session_middleware import DbSessionMiddleware
 from .config.config import get_env_settings
 from .database.engine import DatabaseManager
 from .handlers.add_files_handlers import add_files_router
+from .handlers.add_ticket_handlers import add_ticket_router
 from .handlers.admin_handlers import admin_router
 from .handlers.common_handlers import common_router
 from .handlers.view_tickets_handlers import view_tickets_router
@@ -50,6 +51,7 @@ async def main() -> None:
     dp.include_router(common_router)
     dp.include_router(view_tickets_router)
     dp.include_router(add_files_router)
+    dp.include_router(add_ticket_router)
 
     await bot.delete_webhook(drop_pending_updates=True)
 

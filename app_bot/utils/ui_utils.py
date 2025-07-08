@@ -18,7 +18,9 @@ settings = get_env_settings()
 APP_TIMEZONE = timezone(timedelta(hours=settings.APP_TIMEZONE_OFFSET))
 
 
-async def get_main_menu_message(message: Message, session: AsyncSession, crm_client: CRMClient):
+async def get_main_menu_message(
+    message: Message, session: AsyncSession, crm_client: CRMClient
+) -> None:
     """
     Функция показа главного меню работы с заявками.
     Подгружает информацию о количестве принятых заявок и об общем количестве возможных зяавок

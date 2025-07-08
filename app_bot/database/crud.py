@@ -168,6 +168,24 @@ async def update_default_limit(session: AsyncSession, new_limit: int) -> AppSett
     return settings
 
 
+async def update_default_brigades_count(session: AsyncSession, new_count: int) -> AppSettings:
+    """
+    Обновляет количество бригад по умолчанию в настройках приложения.
+    """
+    logger.info(f"Попытка обновления количества бригад по умолчанию на {new_count}.")
+    if not isinstance(new_count, int) or new_count <= 0:
+        raise ValueError("Количество бригад должно быть положительным целым числом.")
+
+    settings = await get_app_settings(session)
+    settings.default_brigades_count = new_count
+    await session.flush()
+    await session.refresh(settings)
+    logger.info(
+        f"Количество бригад по умолчанию успешно обновлено на {settings.default_brigades_count}."
+    )
+    return settings
+
+
 async def get_override_for_date(
     session: AsyncSession, target_date: date
 ) -> DailyLimitOverride | None:
@@ -186,24 +204,31 @@ async def get_override_for_date(
 
 
 async def set_daily_limit_override(
-    session: AsyncSession, target_date: date, limit: int
+    session: AsyncSession, target_date: date, limit: int, brigades_count: int | None = None
 ) -> DailyLimitOverride:
     """
-    Устанавливает или обновляет переопределение лимита для конкретной даты.
+    Устанавливает или обновляет переопределение лимита и количества бригад для конкретной даты.
     """
-    logger.info(f"Установка/обновление лимита для {target_date} на {limit}.")
+    logger.info(
+        f"Установка/обновление лимита для {target_date} на {limit}, бригад: {brigades_count}."
+    )
     if limit < 0:
         raise ValueError("Лимит не может быть отрицательным.")
+    if brigades_count is not None and brigades_count <= 0:
+        raise ValueError("Количество бригад должно быть положительным числом.")
 
     override = await get_override_for_date(session, target_date)
 
     if override:
         override.daily_limit = limit
-        logger.info(f"Лимит для {target_date} обновлен на {limit}.")
+        override.brigades_count = brigades_count
+        logger.info(f"Настройки для {target_date} обновлены.")
     else:
-        override = DailyLimitOverride(limit_date=target_date, daily_limit=limit)
+        override = DailyLimitOverride(
+            limit_date=target_date, daily_limit=limit, brigades_count=brigades_count
+        )
         session.add(override)
-        logger.info(f"Установлен новый лимит для {target_date}: {limit}.")
+        logger.info(f"Установлены новые настройки для {target_date}.")
 
     await session.flush()
     await session.refresh(override)
@@ -266,13 +291,17 @@ async def delete_daily_limit_override_range(
 
 
 async def set_daily_limit_override_range(
-    session: AsyncSession, start_date: date, end_date: date, limit: int
+    session: AsyncSession,
+    start_date: date,
+    end_date: date,
+    limit: int,
+    brigades_count: int | None = None,
 ) -> list[DailyLimitOverride]:
     """
     Устанавливает или обновляет переопределение лимита для диапазона дат.
     """
     logger.info(
-        f"Установка/обновление лимита для диапазона {start_date} - {end_date} на {limit}."
+        f"Установка/обновление лимита для диапазона {start_date} - {end_date} на {limit}, бригад: {brigades_count}."
     )
     if limit < 0:
         raise ValueError("Лимит не может быть отрицательным.")
@@ -282,14 +311,11 @@ async def set_daily_limit_override_range(
     overrides_list = []
     current_date = start_date
     while current_date <= end_date:
-        # Используем существующую функцию для установки/обновления
-        override = await set_daily_limit_override(session, current_date, limit)
+        override = await set_daily_limit_override(session, current_date, limit, brigades_count)
         overrides_list.append(override)
         current_date += timedelta(days=1)
 
-    logger.info(
-        f"Установлены лимиты для {len(overrides_list)} дней в диапазоне {start_date} - {end_date}."
-    )
+    logger.info(f"Установлены настройки для {len(overrides_list)} дней в диапазоне.")
     return overrides_list
 
 
@@ -311,3 +337,25 @@ async def get_actual_limit_for_date(session: AsyncSession, target_date: date) ->
             f"Используется лимит по умолчанию для {target_date}: {settings.default_daily_limit}"
         )
         return settings.default_daily_limit
+
+
+async def get_actual_brigades_for_date(session: AsyncSession, target_date: date) -> int:
+    """
+    Получает фактическое количество бригад для указанной даты,
+    учитывая переопределения и настройки по умолчанию.
+    """
+    logger.info(f"Запрос фактического количества бригад для даты: {target_date}")
+    override = await get_override_for_date(session, target_date)
+
+    # Если есть переопределение и в нем указано кол-во бригад
+    if override and override.brigades_count is not None:
+        logger.info(
+            f"Используется переопределенное кол-во бригад для {target_date}: {override.brigades_count}"
+        )
+        return override.brigades_count
+    else:
+        settings = await get_app_settings(session)
+        logger.info(
+            f"Используется кол-во бригад по умолчанию для {target_date}: {settings.default_brigades_count}"
+        )
+        return settings.default_brigades_count

@@ -50,6 +50,14 @@ class SetDefaultLimitFSM(StatesGroup):
     waiting_for_new_limit = State()
 
 
+class SetDefaultBrigadesFSM(StatesGroup):
+    """
+    Машина состояний для процесса установки нового кол-ва бригад по умолчанию.
+    """
+
+    waiting_for_new_brigades_count = State()
+
+
 class SetDateLimitFSM(StatesGroup):
     """
     Машина состояний для процесса установки лимитов на выбранные даты.
@@ -57,6 +65,7 @@ class SetDateLimitFSM(StatesGroup):
 
     waiting_for_date_range = State()
     waiting_for_limit_value = State()
+    waiting_for_brigades_count = State()
 
 
 class ViewDateLimitFSM(StatesGroup):
@@ -127,6 +136,7 @@ async def get_ticket_limit_menu_message(
     # 1. Получаем настройки по умолчанию
     app_settings = await crud.get_app_settings(session)
     default_limit = app_settings.default_daily_limit
+    default_brigades = app_settings.default_brigades_count
 
     # 2. Готовим прогноз на 7 дней
     today = date.today()
@@ -136,14 +146,17 @@ async def get_ticket_limit_menu_message(
     for i in range(7):
         current_date = today + timedelta(days=i)
         actual_limit = await crud.get_actual_limit_for_date(session, current_date)
+        actual_brigades = await crud.get_actual_brigades_for_date(session, current_date)
 
         day_name = day_names_ru[current_date.weekday()]
         date_str = current_date.strftime("%d.%m")
 
-        # Проверяем, является ли лимит особым (переопределенным)
-        override_marker = " ✨" if actual_limit != default_limit else ""
+        # Проверяем, является ли лимит или кол-во бригад особым
+        override_marker = ""
+        if actual_limit != default_limit or actual_brigades != default_brigades:
+            override_marker = " ✨"
 
-        limit_info_str = f"{day_name}, {date_str}: <b>{actual_limit}</b>{override_marker}"
+        limit_info_str = f"{day_name}, {date_str}: <b>{actual_limit}</b> заявок, <b>{actual_brigades}</b> бригад{override_marker}"
         weekly_limits_info.append(limit_info_str)
 
     # 3. Собираем итоговое сообщение
@@ -151,13 +164,16 @@ async def get_ticket_limit_menu_message(
 
     instruction_text = (
         "📋 <b>Управление лимитами заявок</b> 📋\n\n"
-        f"Лимит по умолчанию: <b>{default_limit}</b>\n\n"
-        "<u>Максимальные лимиты на ближайшие 7 дней:</u>\n"
+        f"Лимит по умолчанию: <b>{default_limit}</b>\n"
+        f"Бригад по умолчанию: <b>{default_brigades}</b>\n\n"  # <-- Добавляем инфо
+        "<u>Прогноз на ближайшие 7 дней:</u>\n"
         f"{weekly_limits_formatted}\n\n"
-        "<i>✨ - на дату установлен особый лимит.</i>"
+        "<i>✨ - на дату установлен особый лимит или кол-во бригад.</i>"
     )
 
-    kb = get_limits_management_kb(default_limit=default_limit)
+    kb = get_limits_management_kb(
+        default_limit=default_limit, default_brigades=default_brigades
+    )
 
     # 4. Отправляем сообщение
     if isinstance(event, Message):
@@ -448,6 +464,36 @@ async def set_date_limit_start(query: CallbackQuery, session: AsyncSession):
     await query.message.answer(text=instruction_text, reply_markup=kb)
 
 
+@admin_router.callback_query(
+    F.data == "admin_limits_default", HasPermissionFilter(Permission.SET_TRIP_LIMITS)
+)
+async def set_default_limit_start(
+    query: CallbackQuery, state: FSMContext, session: AsyncSession
+):
+    """
+    Обрабатывает нажатие на кнопку "Лимиты по умолчанию".
+    Запрашивает новое значение и переводит в состояние ожидания.
+    """
+    # Сначала отвечаем на callback, чтобы убрать "часики"
+    await query.answer()
+
+    # Получаем текущее значение лимита из БД
+    app_settings = await crud.get_app_settings(session)
+    current_limit = app_settings.default_daily_limit
+
+    prompt_text = (
+        f"Вы собираетесь изменить лимит по умолчанию.\n"
+        f"<b>Текущее значение: {current_limit}</b>\n\n"
+        f"Введите новое числовое значение и отправьте его в чат."
+    )
+
+    # Отправляем сообщение с запросом и клавиатурой отмены
+    await query.message.answer(text=prompt_text, reply_markup=get_cancel_kb())
+
+    # Устанавливаем состояние ожидания нового значения
+    await state.set_state(SetDefaultLimitFSM.waiting_for_new_limit)
+
+
 @admin_router.message(
     SetDefaultLimitFSM.waiting_for_new_limit,
     F.text,
@@ -503,11 +549,11 @@ async def set_date_limit_manual_input(query: CallbackQuery, state: FSMContext):
     """
     Шаг 1 (ручной ввод): Запрашивает дату или диапазон дат.
     """
+    # Этот хендлер остается почти без изменений
     await query.answer()
     await state.clear()
-
     instruction_text = (
-        "⌨️ <b>Ручной ввод лимита</b> ⌨️\n\n"
+        "⌨️ <b>Ручной ввод</b> ⌨️\n\n"
         "Введите дату или диапазон дат в формате <code>ДД.ММ.ГГГГ</code>.\n\n"
         "<b>Примеры:</b>\n"
         "• Одна дата: <code>25.12.2025</code>\n"
@@ -528,29 +574,20 @@ async def process_date_from_callback(
     session: AsyncSession,
 ):
     """
-    Обрабатывает нажатие на кнопку с конкретной датой.
-    Извлекает дату, сохраняет ее в FSM и сразу запрашивает значение лимита.
+    Шаг 1 (быстрый выбор): Обрабатывает нажатие на кнопку с датой.
+    Сразу запрашивает значение ЛИМИТА.
     """
     await query.answer()
-
-    # 1. Получаем дату из callback_data
     target_date = date.fromisoformat(callback_data.date_iso)
-
-    # 2. Сохраняем дату в FSM для следующего шага
-    #    process_limit_for_date ожидает 'start_date' и 'end_date'
     await state.update_data(start_date=target_date, end_date=target_date)
-
-    # 3. Устанавливаем FSM в состояние ожидания лимита
     await state.set_state(SetDateLimitFSM.waiting_for_limit_value)
 
-    # 4. Получаем текущий лимит для информативного сообщения
     current_limit = await crud.get_actual_limit_for_date(session, target_date)
 
-    # 5. Запрашиваем новое значение лимита у пользователя
     prompt_text = (
-        f"Вы редактируете лимит для даты: <b>{target_date.strftime('%d.%m.%Y')}</b>.\n"
-        f"Текущий лимит: <code>{current_limit}</code>.\n\n"
-        "Введите новое числовое значение и отправьте его в чат."
+        f"Вы редактируете настройки для даты: <b>{target_date.strftime('%d.%m.%Y')}</b>.\n"
+        f"Текущий лимит заявок: <code>{current_limit}</code>.\n\n"
+        "Введите новое числовое значение для <b>лимита заявок</b>."
     )
     await query.message.answer(text=prompt_text, reply_markup=get_cancel_kb())
 
@@ -592,7 +629,8 @@ async def process_date_range(message: Message, state: FSMContext):
 
     # Запрашиваем значение лимита
     await message.answer(
-        "Отлично! Теперь введите <b>числовое значение лимита</b> для указанных дат."
+        "Отлично! Теперь введите <b>числовое значение лимита</b>.\n"
+        "`10` — установить лимит 10.\n"
     )
     await state.set_state(SetDateLimitFSM.waiting_for_limit_value)
 
@@ -604,54 +642,97 @@ async def process_date_range(message: Message, state: FSMContext):
 )
 async def process_limit_for_date(message: Message, state: FSMContext, session: AsyncSession):
     """
-    Шаг 3: Получает лимит, сохраняет его для дат из state.data и завершает.
+    Шаг 3 (общий): Получает лимит, сохраняет его в state и запрашивает КОЛИЧЕСТВО БРИГАД.
     """
-    # Валидация лимита
     try:
         limit_value = int(message.text.strip())
         if limit_value < 0:
+            await message.answer("❌ <b>Ошибка:</b> Лимит не может быть отрицательным.")
+            return
+    except (ValueError, TypeError):
+        await message.answer("❌ <b>Ошибка:</b> Введите целое число.")
+        return
+
+    # Сохраняем лимит в FSM и переходим на следующий шаг
+    await state.update_data(limit_value=limit_value)
+
+    # Узнаем текущее количество бригад для подсказки
+    fsm_data = await state.get_data()
+    start_date = fsm_data.get("start_date")  # Дата уже есть в FSM
+    current_brigades = await crud.get_actual_brigades_for_date(session, start_date)
+
+    await message.answer(
+        f"Лимит <code>{limit_value}</code> принят.\n"
+        f"Текущее количество бригад: <code>{current_brigades}</code>.\n\n"
+        "Теперь введите новое <b>количество бригад</b>.\n"
+        "Чтобы использовать значение по умолчанию, отправьте <code>0</code>."
+    )
+    await state.set_state(SetDateLimitFSM.waiting_for_brigades_count)
+
+
+@admin_router.message(
+    SetDateLimitFSM.waiting_for_brigades_count,
+    F.text,
+    HasPermissionFilter(Permission.SET_TRIP_LIMITS),
+)
+async def process_brigades_for_date(message: Message, state: FSMContext, session: AsyncSession):
+    """
+    Шаг 4 (общий): Получает кол-во бригад, сохраняет все в БД и завершает.
+    """
+    try:
+        brigades_value = int(message.text.strip())
+        if brigades_value < 0:
             await message.answer(
-                "❌ <b>Ошибка:</b> Лимит не может быть отрицательным. Попробуйте снова."
+                "❌ <b>Ошибка:</b> Количество бригад не может быть отрицательным."
             )
             return
     except (ValueError, TypeError):
         await message.answer("❌ <b>Ошибка:</b> Введите целое число.")
         return
 
-    # Получаем данные из FSM
+    # Если пользователь ввел 0, мы будем сохранять None, чтобы использовалось значение по умолчанию
+    final_brigades_value = brigades_value if brigades_value > 0 else None
+
+    # Получаем все данные из FSM
     fsm_data = await state.get_data()
     start_date = fsm_data.get("start_date")
     end_date = fsm_data.get("end_date")
+    limit_value = fsm_data.get("limit_value")
 
-    if not start_date or not end_date:
-        logger.error(
-            f"Критическая ошибка FSM: отсутствуют даты в состоянии для user {message.from_user.id}"
-        )
+    if not all([start_date, end_date, limit_value is not None]):
         await message.answer("❗️ Произошла внутренняя ошибка, попробуйте начать заново.")
         await state.clear()
-        await get_ticket_limit_menu_message(message, session=session)
         return
 
     # Сохраняем в БД
     try:
         await crud.set_daily_limit_override_range(
-            session=session, start_date=start_date, end_date=end_date, limit=limit_value
+            session=session,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit_value,
+            brigades_count=final_brigades_value,
         )
     except Exception as e:
         logger.error(f"Ошибка при установке лимита на диапазон дат: {e}", exc_info=True)
-        await message.answer(
-            "❌ Произошла ошибка при сохранении в базу данных. Попробуйте позже."
-        )
+        await message.answer("❌ Произошла ошибка при сохранении в базу данных.")
         await state.clear()
         return
 
     # Формируем сообщение об успехе
+    brigade_info = (
+        f", бригад: <b>{final_brigades_value}</b>"
+        if final_brigades_value is not None
+        else ", бригад: (по умолч.)"
+    )
     if start_date == end_date:
         date_info = f"на дату <b>{start_date.strftime('%d.%m.%Y')}</b>"
     else:
         date_info = f"для диапазона дат с <b>{start_date.strftime('%d.%m.%Y')}</b> по <b>{end_date.strftime('%d.%m.%Y')}</b>"
 
-    await message.answer(f"✅ Успешно! Установлен лимит <b>{limit_value}</b> {date_info}.")
+    await message.answer(
+        f"✅ Успешно! Установлен лимит <b>{limit_value}</b>{brigade_info} {date_info}."
+    )
 
     # Завершаем FSM и показываем обновленное меню
     await state.clear()
@@ -806,3 +887,50 @@ async def process_calendar_url_cmd(message: Message, state: FSMContext, session:
         await state.clear()
         # И возвращаемся в меню управления лимитами, чтобы показать обновленные данные.
         await get_ticket_limit_menu_message(message, session=session)
+
+
+@admin_router.callback_query(
+    F.data == "admin_brigades_default", HasPermissionFilter(Permission.SET_TRIP_LIMITS)
+)
+async def set_default_brigades_start(
+    query: CallbackQuery, state: FSMContext, session: AsyncSession
+):
+    await query.answer()
+    settings = await crud.get_app_settings(session)
+    await query.message.answer(
+        f"Текущее количество бригад по умолчанию: <b>{settings.default_brigades_count}</b>.\n\n"
+        "Введите новое числовое значение:",
+        reply_markup=get_cancel_kb(),
+    )
+    await state.set_state(SetDefaultBrigadesFSM.waiting_for_new_brigades_count)
+
+
+@admin_router.message(
+    SetDefaultBrigadesFSM.waiting_for_new_brigades_count,
+    F.text,
+    HasPermissionFilter(Permission.SET_TRIP_LIMITS),
+)
+async def process_new_default_brigades_count(
+    message: Message, state: FSMContext, session: AsyncSession
+):
+    try:
+        new_count = int(message.text.strip())
+        if new_count <= 0:
+            await message.answer("❌ <b>Ошибка:</b> Количество бригад должно быть больше нуля.")
+            return
+    except (ValueError, TypeError):
+        await message.answer("❌ <b>Ошибка:</b> Введите целое число.")
+        return
+
+    try:
+        await crud.update_default_brigades_count(session, new_count)
+        await message.answer(
+            f"✅ Количество бригад по умолчанию успешно изменено на <b>{new_count}</b>."
+        )
+    except Exception as e:
+        # ... (обработка ошибок) ...
+        return
+    finally:
+        await state.clear()
+
+    await get_ticket_limit_menu_message(message, session=session)

@@ -29,10 +29,10 @@ class FileInfo(BaseSchema):
     """Информация о прикрепленном файле."""
 
     id: str
-    name: str
+    name: str | None = None
     extension: str | None = None
-    size: int
-    path: str
+    size: int | None = None
+    path: str | None = None
 
 
 class Employee(BaseSchema):

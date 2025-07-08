@@ -71,16 +71,19 @@ def get_user_management_kb(user_telegram_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def get_limits_management_kb(default_limit: int) -> InlineKeyboardMarkup:
+def get_limits_management_kb(default_limit: int, default_brigades: int) -> InlineKeyboardMarkup:
     """
     Инлайн-клавиатура для управления лимитами заявок.
-    Содержит кнопки Лимиты по умолчанию, Лимиты на дату, Отмена.
     """
-
     builder = InlineKeyboardBuilder()
     builder.button(
         text=f"📊 Изменить лимит по умолчанию ({default_limit})",
         callback_data="admin_limits_default",
+    )
+    # --- НОВАЯ КНОПКА ---
+    builder.button(
+        text=f"👥 Изменить кол-во бригад ({default_brigades})",
+        callback_data="admin_brigades_default",
     )
     builder.button(
         text="📅 Редактировать лимиты на дату",
@@ -91,7 +94,7 @@ def get_limits_management_kb(default_limit: int) -> InlineKeyboardMarkup:
         callback_data="admin_limits_view",
     )
     builder.button(text="❌ Отмена", callback_data="admin_cancel")
-    builder.adjust(1)
+    builder.adjust(1)  # Все кнопки в один столбец для наглядности
     return builder.as_markup()
 
 
