@@ -1,0 +1,20 @@
+from app_bot.database.models import Permission
+
+
+USER_ROLE_PERMISSIONS = [
+    Permission.CREATE_TICKETS,
+    Permission.VIEW_TICKETS,
+]
+
+GEODESIST_ROLE_PERMISSIONS = USER_ROLE_PERMISSIONS + [
+    Permission.SET_TRIP_LIMITS,
+    Permission.ADD_FILES_FROM_VISIT,
+]
+
+MANAGER_ROLE_PERMISSIONS = USER_ROLE_PERMISSIONS + [
+    Permission.SET_TRIP_LIMITS,
+]
+
+ADMIN_ROLE_PERMISSIONS = MANAGER_ROLE_PERMISSIONS + [
+    Permission.MANAGE_USERS,
+]

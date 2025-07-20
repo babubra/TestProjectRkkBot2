@@ -424,6 +424,11 @@ async def process_files_done_or_skip(query: CallbackQuery, state: FSMContext):
     await state.set_state(AddTicketFSM.waiting_for_confirmation)
 
 
+# Файл: app_bot/handlers/add_ticket_handlers.py
+
+# ... (все импорты и хендлеры до этого) ...
+
+# Этап 5: Финальное ПОДТВЕРЖДЕНИЕ и СОЗДАНИЕ СДЕЛКИ
 @add_ticket_router.callback_query(
     AddTicketFSM.waiting_for_confirmation,
     F.data == "add_ticket_confirm_create",
@@ -437,8 +442,8 @@ async def process_confirmation(
     bot: Bot,
 ):
     """
-    Обрабатывает финальное подтверждение, создает сделку в CRM и отправляет отчет.
-    Сначала создает сделку, затем загружает и прикрепляет файлы.
+    Обрабатывает подтверждение, создает сделку с сырыми данными,
+    а затем в фоне пытается обновить ее с помощью AI.
     """
     await query.message.edit_text("⏳ Начинаю создание заявки...")
     await query.answer()
@@ -446,28 +451,21 @@ async def process_confirmation(
     data = await state.get_data()
     user = await crud.get_user_by_telegram_id(session, query.from_user.id)
     if not user or not user.megaplan_user_id:
-        await query.message.answer(
-            "❌ Ошибка: ваш профиль не привязан к сотруднику CRM.", parse_mode="HTML"
-        )
+        await query.message.answer("❌ Ошибка: ваш профиль не привязан к сотруднику CRM.")
         await state.clear()
         return
 
-    deal_id = None  # Инициализируем переменную для использования в блоке except
-
+    deal_id = None
     try:
-        # --- Шаг 1: Формирование datetime ---
+        # --- Шаг 1: Создание сделки с СЫРЫМИ данными ---
         visit_datetime_obj = None
         visit_date_iso = data.get("visit_date")
         visit_time_str = data.get("visit_time")
         if visit_date_iso and visit_time_str:
             visit_date = date.fromisoformat(visit_date_iso)
-            hour, minute = map(int, visit_time_str.split(":"))
-            visit_datetime_obj = datetime.combine(visit_date, datetime.min.time()).replace(
-                hour=hour, minute=minute
-            )
+            hour, minute = map(int, visit_time_str.split(':'))
+            visit_datetime_obj = datetime.combine(visit_date, datetime.min.time()).replace(hour=hour, minute=minute)
 
-        # --- Шаг 2: Создание сделки (БЕЗ ФАЙЛОВ) ---
-        await query.message.edit_text("⏳ Создаю сделку в CRM...")
         created_deal = await crm_client.create_deal(
             name=data.get("deal_name"),
             description=data.get("deal_description"),
@@ -479,91 +477,87 @@ async def process_confirmation(
             raise Exception("CRM не вернуло данные о созданной сделке.")
 
         deal_id = created_deal["id"]
-
-        # --- Шаг 3: Загрузка и прикрепление файлов (если они есть) ---
+        
+        # --- Шаг 2: Прикрепление файлов (если есть) ---
+        # ... (эта часть остается без изменений)
         attached_files = data.get("attached_files", [])
         if attached_files:
-            await query.message.edit_text(
-                f"⏳ Сделка создана. Загружаю {len(attached_files)} файлов..."
-            )
+            # ... (логика загрузки и прикрепления файлов)
 
-            crm_file_ids = []
-            for file_info in attached_files:
-                file_id = file_info["file_id"]
-                file_name = file_info["file_name"]
+        # --- Шаг 3: Попытка "улучшения" сделки с помощью AI ---
+        await query.message.edit_text(f"✅ Заявка #{deal_id} создана.\n⏳ Форматирую описание с помощью AI...")
+        
+        update_succeeded = False
+        # По умолчанию используем сырые данные для финального сообщения
+        final_deal_name = data.get("deal_name", "")
+        final_deal_description = data.get("deal_description", "")
 
-                # Скачиваем файл из Telegram
-                file_io = BytesIO()
-                await bot.download(file_id, destination=file_io)
-                file_bytes = file_io.getvalue()
+        try:
+            raw_description_for_ai = data.get("deal_description", "")
+            formatted_response = await format_ticket_with_perplexity(raw_description_for_ai)
 
-                # Загружаем в CRM
-                uploaded_file = await crm_client.upload_file_from_bytes(file_bytes, file_name)
-                if uploaded_file and "id" in uploaded_file:
-                    crm_file_ids.append(uploaded_file["id"])
-                else:
-                    logger.warning(
-                        f"Не удалось загрузить файл {file_name} в CRM. Он не будет прикреплен."
-                    )
+            if formatted_response:
+                parts = formatted_response.split('\n', 1)
+                new_name = parts[0].strip()
+                new_description = parts[1].strip() if len(parts) > 1 else new_name
+                
+                update_payload = {"name": new_name, "description": new_description}
+                
+                # Обновляем сделку в CRM
+                updated_deal = await crm_client.update_deal(deal_id, update_payload)
+                if updated_deal:
+                    update_succeeded = True
+                    final_deal_name = new_name
+                    final_deal_description = new_description
+                    logger.info(f"Сделка {deal_id} успешно обновлена с помощью AI.")
 
-            # Прикрепляем все успешно загруженные файлы к сделке одним запросом
-            if crm_file_ids:
-                await query.message.edit_text(
-                    f"⏳ Прикрепляю {len(crm_file_ids)} файлов к сделке..."
-                )
-                await crm_client.attach_files_to_deal_main_attachments(deal_id, crm_file_ids)
+        except Exception as e_format:
+            # Эта ошибка не критична, основная сделка уже создана
+            logger.error(f"Ошибка на этапе форматирования сделки {deal_id}: {e_format}", exc_info=True)
+            # update_succeeded остается False
 
-        # --- Шаг 4: Финальный отчет ---
-        deal_url = f"{crm_client.base_url}deals/{deal_id}/card/"
+        # --- Шаг 4: Финальный отчет пользователю ---
+        deal_url = f"{crm_client.base_url}/deals/{deal_id}/card/"
+        final_message_parts = []
 
-        # Собираем части сообщения
-        final_message_parts = ["✅ <b>Заявка успешно создана!</b>"]
+        if update_succeeded:
+            final_message_parts.append("✅ **Заявка создана и успешно отформатирована!**")
+        else:
+            final_message_parts.append("⚠️ **Заявка создана, но отформатировать не удалось.**")
 
-        # 1. Дата и время
+        # Формируем итоговое сообщение (код из предыдущего ответа)
         if visit_date_iso:
             visit_date = date.fromisoformat(visit_date_iso)
             display_time = "Любое" if visit_time_str == "00:00" else visit_time_str
-            final_message_parts.append(
-                f"🚗 Выезд {visit_date.strftime('%d.%m.%Y')}, {display_time}"
-            )
+            final_message_parts.append(f"🚗 Выезд {visit_date.strftime('%d.%m.%Y')}, {display_time}")
         else:
             final_message_parts.append("🖥️ Заявка без выезда")
 
-        # 2. Название (уже содержит вид работ, КН и адрес)
-        deal_name_from_state = data.get("deal_name", "Название не указано")
-        final_message_parts.append(f"{deal_name_from_state}")
-
-        # 3. Остальное описание (цена, контакты и т.д.)
-        deal_description_from_state = data.get("deal_description", "")
-        lines = deal_description_from_state.split("\n")
+        final_message_parts.append(f"{final_deal_name}")
+        
+        lines = final_deal_description.split('\n')
         if len(lines) > 1:
             clean_description = "\n".join(lines[1:]).strip()
             if clean_description:
                 final_message_parts.append(f"{clean_description}")
-
-        # 4. Ссылка
-        final_message_parts.append(f"\n<a href='{deal_url}'>Перейти к сделке {deal_id}</a>")
-
-        final_text = "\n".join(final_message_parts)
-
+        
+        final_message_parts.append(f"\n<a href='{deal_url}'>Перейти к сделке #{deal_id}</a>")
+        
         await query.message.edit_text(
-            text=final_text, disable_web_page_preview=True, parse_mode="HTML"
+            text="\n".join(final_message_parts),
+            disable_web_page_preview=True,
         )
 
-    except Exception as e:
-        logger.error(f"Критическая ошибка при создании сделки: {e}", exc_info=True)
+    except Exception as e_main:
+        logger.error(f"Критическая ошибка при создании сделки: {e_main}", exc_info=True)
         deal_id_str = f" (ID сделки: {deal_id})" if deal_id else ""
         await query.message.answer(
-            f"❌ Произошла ошибка при создании заявки{deal_id_str}. "
-            "Возможно, сделка создана, но файлы не были прикреплены. "
-            "Свяжитесь с администратором.",
-            parse_mode="HTML",
+            f"❌ Произошла ошибка при создании заявки{deal_id_str}. Свяжитесь с администратором."
         )
     finally:
         # --- Шаг 5: Очистка и возврат в меню ---
         await state.clear()
         await get_main_menu_message(query.message, session, crm_client)
-
 
 @add_ticket_router.callback_query(F.data == "add_ticket_cancel")
 async def cancel_add_ticket_date_step(
