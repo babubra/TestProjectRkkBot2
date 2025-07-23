@@ -1,0 +1,38 @@
+[tool.ruff]
+# Длина строки
+line-length = 96
+# Целевая версия Python
+target-version = "py39"
+# Размер отступа
+indent-width = 4
+
+[tool.ruff.lint]
+# Включаем основные правила
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+
+# ВАЖНО: Исключаем E501, так как форматтер сам управляет длиной строк
+ignore = ["E501"]
+
+# Автоматически исправляемые правила
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.isort]
+# Настройки для сортировки импортов
+known-first-party = ["app_bot"]
+force-single-line = false
+lines-after-imports = 2
+
+[tool.ruff.format]
+# Стиль кавычек
+quote-style = "double"
+# Отступы
+indent-style = "space"
