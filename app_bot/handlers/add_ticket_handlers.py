@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import date, datetime, timedelta
 from io import BytesIO
@@ -22,8 +23,11 @@ from app_bot.keyboards.add_ticket_keyboards import (
     get_add_ticket_files_kb,
     get_add_ticket_time_kb,
 )
-from app_bot.utils.ui_utils import get_main_menu_message
+from app_bot.nspd_service.nspd_client import NspdClient
+from app_bot.utils.ui_utils import get_cadastral_data_as_json, get_main_menu_message
 
+
+SERVICE_DATA_CRM_FIELD = "Category1000076CustomFieldServiceData"
 
 add_ticket_router = Router()
 logger = logging.getLogger(__name__)
@@ -276,21 +280,9 @@ async def process_description(message: Message, state: FSMContext):
     Ловит описание заявки, сохраняет его и предлагает прикрепить файлы.
     """
 
-    description_text = message.text
-
-    # --- ЗАГЛУШКА для AI-логики ---
-    # В будущем здесь будет вызов AI, который вернет name и description
-    # А пока просто берем первую строку как название, а все остальное как описание
-    lines = description_text.split("\n")
-    deal_name = lines[0].strip()
-    if len(deal_name) > 150:  # Ограничим длину названия
-        deal_name = deal_name[:150] + "..."
-
-    deal_description = description_text
-    # --- КОНЕЦ ЗАГЛУШКИ ---
+    deal_description = message.text
 
     await state.update_data(
-        deal_name=deal_name,
         deal_description=deal_description,
         attached_files=[],  # Инициализируем пустой список для файлов
     )
@@ -381,14 +373,13 @@ async def process_files_done_or_skip(query: CallbackQuery, state: FSMContext):
     data = await state.get_data()
 
     # Собираем информацию для итогового сообщения
-    deal_name = data.get("deal_name", "Без названия")
     deal_description = data.get("deal_description", "Без описания")
     visit_date_iso = data.get("visit_date")
     visit_time = data.get("visit_time")
     attached_files = data.get("attached_files", [])
 
     # Формируем текст
-    summary_parts = [f"🔔 <b>Проверьте данные перед созданием заявки:</b>\n"]
+    summary_parts = ["🔔 <b>Проверьте данные перед созданием заявки:</b>\n"]
 
     if visit_date_iso and visit_time:
         visit_date = date.fromisoformat(visit_date_iso)
@@ -399,7 +390,6 @@ async def process_files_done_or_skip(query: CallbackQuery, state: FSMContext):
     else:
         summary_parts.append("<b>Дата и время:</b> Без выезда")
 
-    summary_parts.append(f"<b>Название:</b> {deal_name}")
     summary_parts.append(f"<b>Описание:</b>\n{deal_description}")
 
     if attached_files:
@@ -431,12 +421,14 @@ async def process_confirmation(
     session: AsyncSession,
     crm_client: CRMClient,
     bot: Bot,
+    nspd_client: NspdClient,  # Добавляем nspd_client из middleware
 ):
     """
-    Обрабатывает подтверждение.
+    Обрабатывает финальное подтверждение создания заявки.
     1. Создает сделку с "сырыми" данными и прикрепляет файлы.
-    2. Сразу показывает пользователю созданную сделку в заданном формате.
-    3. В фоне пытается обновить ее с помощью AI и возвращает в главное меню.
+    2. Сразу показывает пользователю созданную сделку.
+    3. В фоне запускает улучшение с помощью AI и поиск кадастровых номеров.
+    4. Собирает результаты фоновых задач и ОДНИМ запросом обновляет сделку.
     """
     await query.message.edit_text("⏳ Начинаю создание заявки...")
     await query.answer()
@@ -463,7 +455,6 @@ async def process_confirmation(
                 hour=hour, minute=minute
             )
 
-        # Используем первую строку описания как имя, остальное как описание для CRM
         raw_full_description = data.get("deal_description", "")
         lines = raw_full_description.split("\n", 1)
         deal_name_for_crm = lines[0].strip()
@@ -507,10 +498,8 @@ async def process_confirmation(
             if crm_file_ids:
                 await crm_client.attach_files_to_deal_main_attachments(deal_id, crm_file_ids)
 
-        # --- Шаг 3: Показ "сырой" заявки пользователю в НОВОМ ФОРМАТЕ ---
+        # --- Шаг 3: Показ "сырой" заявки пользователю ---
         deal_url = f"{crm_client.base_url}deals/{deal_id}/card/"
-
-        # Собираем сообщение в точности по вашему примеру
         raw_deal_message_parts = ["✅ <b>Заявка успешно создана!</b>"]
 
         if visit_date_iso and visit_time_str:
@@ -522,63 +511,73 @@ async def process_confirmation(
         else:
             raw_deal_message_parts.append("🖥️ <b>Заявка без выезда</b>")
 
-        # Добавляем полное описание от пользователя
         raw_deal_message_parts.append(data.get("deal_description", "Нет описания."))
-
-        # Добавляем ссылку в конце
         raw_deal_message_parts.append(f"\n<a href='{deal_url}'>Перейти к сделке #{deal_id}</a>")
 
-        # Редактируем исходное сообщение
         await query.message.edit_text(
             text="\n".join(raw_deal_message_parts),
             disable_web_page_preview=True,
             parse_mode="HTML",
         )
 
-        # --- Шаг 4: Уведомление о фоновой обработке и запуск AI ---
-        status_msg = await query.message.answer("⏳ Улучшаю заявку с помощью AI...")
+        # --- Шаг 4: Запуск фоновых задач и единое обновление ---
+        status_msg = await query.message.answer(
+            "⏳ Улучшаю заявку с помощью AI и ищу кадастровые номера..."
+        )
 
-        try:
-            # Для AI используем полное описание, которое ввел пользователь
-            raw_description_for_ai = data.get("deal_description", "")
-            if raw_description_for_ai:
-                formatted_data = await format_ticket_with_perplexity(raw_description_for_ai)
+        raw_description_for_background = data.get("deal_description", "")
 
-                if formatted_data and isinstance(formatted_data, dict):
-                    new_name = formatted_data.get("name")
-                    new_description = formatted_data.get("description")
-
-                    if new_name and new_description:
-                        update_payload = {"name": new_name, "description": new_description}
-                        await crm_client.update_deal(deal_id, update_payload)
-                        logger.info(f"Сделка {deal_id} успешно обновлена с помощью AI.")
-                    else:
-                        logger.warning(
-                            f"AI вернул некорректный словарь для сделки {deal_id}. Ответ: {formatted_data}"
-                        )
-                else:
-                    logger.warning(
-                        f"AI не вернул данные для сделки {deal_id}. Ответ: {formatted_data}"
-                    )
-
-        except Exception as e_format:
-            logger.error(
-                f"Ошибка на этапе фонового форматирования сделки {deal_id}: {e_format}",
-                exc_info=True,
+        if raw_description_for_background:
+            # Создаем обе фоновые задачи
+            task_ai = format_ticket_with_perplexity(raw_description_for_background)
+            task_cadastral = get_cadastral_data_as_json(
+                raw_description_for_background, nspd_client
             )
+
+            # Запускаем их параллельно и ждем результатов
+            ai_result, cadastral_json_string = await asyncio.gather(
+                task_ai, task_cadastral, return_exceptions=True
+            )
+
+            # Готовим единый payload для обновления
+            update_payload = {}
+
+            # Обрабатываем результат от AI
+            if isinstance(ai_result, dict):
+                new_name = ai_result.get("name")
+                new_description = ai_result.get("description")
+                if new_name and new_description:
+                    update_payload["name"] = new_name
+                    update_payload["description"] = new_description
+            elif isinstance(ai_result, Exception):
+                logger.error(
+                    f"Ошибка на этапе форматирования AI для сделки {deal_id}: {ai_result}"
+                )
+
+            # Обрабатываем результат от НСПД
+            if isinstance(cadastral_json_string, str):
+                update_payload[SERVICE_DATA_CRM_FIELD] = cadastral_json_string
+            elif isinstance(cadastral_json_string, Exception):
+                logger.error(
+                    f"Ошибка на этапе получения кадастровых данных для сделки {deal_id}: {cadastral_json_string}"
+                )
+
+            # Если есть что обновлять, делаем один запрос в CRM
+            if update_payload:
+                await crm_client.update_deal(deal_id, update_payload)
+                logger.info(f"Сделка {deal_id} успешно обновлена фоновыми данными.")
+            else:
+                logger.info(f"Для сделки {deal_id} не было данных для фонового обновления.")
 
     except Exception as e_main:
         logger.error(f"Критическая ошибка при создании сделки: {e_main}", exc_info=True)
         deal_id_str = f" (ID сделки: {deal_id})" if deal_id else ""
+        error_text = f"❌ Произошла ошибка при создании заявки{deal_id_str}. Свяжитесь с администратором."
         # Проверяем, было ли уже отредактировано сообщение, чтобы избежать ошибки
-        if query.message.text != "⏳ Начинаю создание заявки...":
-            await query.message.answer(
-                f"❌ Произошла ошибка при создании заявки{deal_id_str}. Свяжитесь с администратором."
-            )
-        else:
-            await query.message.edit_text(
-                f"❌ Произошла ошибка при создании заявки{deal_id_str}. Свяжитесь с администратором."
-            )
+        try:
+            await query.message.edit_text(error_text)
+        except Exception:
+            await query.message.answer(error_text)
 
     finally:
         # --- Шаг 5: Очистка и возврат в меню ---

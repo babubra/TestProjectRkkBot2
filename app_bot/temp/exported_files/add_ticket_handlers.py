@@ -388,7 +388,7 @@ async def process_files_done_or_skip(query: CallbackQuery, state: FSMContext):
     attached_files = data.get("attached_files", [])
 
     # Формируем текст
-    summary_parts = [f"🔔 <b>Проверьте данные перед созданием заявки:</b>\n"]
+    summary_parts = ["🔔 <b>Проверьте данные перед созданием заявки:</b>\n"]
 
     if visit_date_iso and visit_time:
         visit_date = date.fromisoformat(visit_date_iso)

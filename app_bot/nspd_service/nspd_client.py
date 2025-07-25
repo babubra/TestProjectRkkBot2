@@ -1,63 +1,17 @@
-import asyncio
 import json
 import traceback
-from typing import Any, List, Literal, Optional
+from typing import Literal, Optional
 from urllib.parse import urlencode
 
 import httpx
-from pydantic import BaseModel, Field, field_validator
 from pyproj import CRS, Transformer
+
+from app_bot.nspd_service.schemas import CadastralObject
 
 
 # --- Конфигурация систем координат ---
 CRS_WEB_MERCATOR = CRS.from_epsg(3857)
 CRS_WGS84 = CRS.from_epsg(4326)
-
-
-# --- Модель данных для результата (Pydantic) ---
-class CadastralObject(BaseModel):
-    """
-    Структурированная информация о кадастровом объекте.
-
-    Модель используется для валидации и удобного доступа к данным,
-    полученным от API nspd.gov.ru.
-    """
-
-    cadastral_number: str = Field(description="Кадастровый номер")
-    category_name: Optional[str] = Field(
-        None, description="Категория объекта (Здание, Участок и т.д.)"
-    )
-    address: Optional[str] = Field(None, description="Читаемый адрес объекта")
-
-    # Основные характеристики объекта
-    area_sq_m: Optional[float] = Field(None, description="Площадь в квадратных метрах")
-    extension_m: Optional[float] = Field(
-        None, description="Протяженность в метрах (для линейных объектов)"
-    )
-
-    # Геометрия
-    geometry_type: Optional[Literal["Point", "Polygon"]] = Field(
-        None, description="Тип геометрии"
-    )
-    coordinates_wgs84: Optional[Any] = Field(None, description="Координаты в системе WGS 84")
-    centroid_wgs84: Optional[list[float]] = Field(
-        None, description="Центр полигона [lon, lat] или [lat, lon]"
-    )
-
-    # Связанные объекты
-    related_cadastral_numbers: Optional[List[str]] = Field(
-        None, description="Список кадастровых номеров связанных дочерних объектов"
-    )
-
-    original_geometry: Optional[dict[str, Any]] = Field(
-        None, description="Исходные данные геометрии от сервера"
-    )
-
-    @field_validator("area_sq_m", "extension_m")
-    def clean_float_fields(cls, v):
-        if v is not None:
-            return float(v)
-        return v
 
 
 class NspdClient:
@@ -117,7 +71,7 @@ class NspdClient:
         sum_lat = sum(point[1] for point in outer_ring[:-1])
         return [sum_lon / num_points, sum_lat / num_points]
 
-    async def _get_related_objects(self, geom_id: int, category_id: int) -> Optional[List[str]]:
+    async def _get_related_objects(self, geom_id: int, category_id: int) -> Optional[list[str]]:
         """Вспомогательный метод для получения связанных объектов."""
         params = {"tabClass": "objectsList", "categoryId": category_id, "geomId": geom_id}
         url = f"/api/geoportal/v1/tab-group-data?{urlencode(params)}"
@@ -195,14 +149,12 @@ class NspdClient:
                 "original_geometry": geometry,
             }
 
-            # --- Новая логика для получения связанных объектов ---
             geom_id = feature.get("id")
             category_id = properties.get("category")
             if geom_id and category_id:
                 related_numbers = await self._get_related_objects(geom_id, category_id)
                 if related_numbers:
                     result_data["related_cadastral_numbers"] = related_numbers
-            # --- Конец новой логики ---
 
             if geometry and geometry.get("coordinates"):
                 geom_type = geometry.get("type")
@@ -252,45 +204,3 @@ class NspdClient:
         """Корректно закрывает сессию httpx клиента."""
         if not self.client.is_closed:
             await self.client.aclose()
-
-
-async def main():
-    """Тестовая функция для демонстрации работы клиента с разными типами объектов."""
-    client = NspdClient(timeout=10.0)  # Увеличил таймаут для надежности
-    test_numbers = {
-        "ТЕСТ 1: Участок со связанным объектом": "39:17:010016:24",
-    }
-
-    for description, number in test_numbers.items():
-        print("\n" + "=" * 50 + f"\n{description}")
-        # Получаем объект с порядком lon,lat по умолчанию
-        obj = await client.get_object_info(number, coords_order="lon,lat")
-        if obj:
-            print("  Статус: УСПЕХ")
-            print(f"  Кадастровый номер: {obj.cadastral_number}")
-            print(f"  Тип объекта: {obj.category_name}")
-            print(f"  Адрес: {obj.address}")
-            if obj.area_sq_m is not None and obj.area_sq_m > 0:
-                print(f"  Площадь: {obj.area_sq_m} кв.м.")
-            if obj.extension_m is not None and obj.extension_m > 0:
-                print(f"  Протяженность: {obj.extension_m} м.")
-            if obj.centroid_wgs84:
-                print(f"  Центр (lon, lat): {obj.centroid_wgs84}")
-
-            # Выводим связанные объекты, если они есть
-            if obj.related_cadastral_numbers:
-                print(f"  Связанные объекты: {obj.related_cadastral_numbers}")
-            else:
-                print("  Связанные объекты: не найдены")
-
-        else:
-            print("  Статус: НЕУДАЧА")
-
-    aaa = await client.get_object_info("39:17:010016:")
-    print(aaa)
-
-    await client.close()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
