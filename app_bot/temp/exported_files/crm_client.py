@@ -340,6 +340,7 @@ class CRMClient:
             "Category1000076CustomFieldViezdFayliDlyaViezda",
             "Category1000076CustomFieldSluzhebniyTelegramuserid",
             "Category1000076CustomFieldViezdRezultatViezda",
+            "Category1000076CustomFieldServiceData",
             {
                 "contractor": [
                     "avatar",

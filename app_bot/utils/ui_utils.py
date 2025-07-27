@@ -141,7 +141,10 @@ def create_2gis_link(lon: float, lat: float) -> str:
 
 
 async def get_and_format_deals_from_crm(
-    crm_client: CRMClient, start_date: date, end_date: date
+    crm_client: CRMClient,
+    start_date: date,
+    end_date: date,
+    nspd_client: NspdClient,
 ) -> list[dict]:
     """
     Универсальная функция для получения и форматирования списка сделок за период.

@@ -1,5 +1,9 @@
+import asyncio
+import enum
 import json
+import logging
 import traceback
+from datetime import datetime, timedelta
 from typing import Literal, Optional
 from urllib.parse import urlencode
 
@@ -9,9 +13,18 @@ from pyproj import CRS, Transformer
 from app_bot.nspd_service.schemas import CadastralObject
 
 
+logger = logging.getLogger(__name__)
+
 # --- Конфигурация систем координат ---
 CRS_WEB_MERCATOR = CRS.from_epsg(3857)
 CRS_WGS84 = CRS.from_epsg(4326)
+
+
+# 1. Создаем Enum для состояний для лучшей читаемости
+class CircuitState(enum.Enum):
+    CLOSED = "CLOSED"  # Запросы разрешены
+    OPEN = "OPEN"  # Запросы блокируются
+    HALF_OPEN = "HALF_OPEN"  # Один тестовый запрос разрешен
 
 
 class NspdClient:
@@ -30,11 +43,12 @@ class NspdClient:
     - **Находит связанные кадастровые номера (например, здания на участке).**
     """
 
-    def __init__(self, timeout: float = 5.0):
+    def __init__(self, timeout: float = 5.0, cooldown_minutes: int = 5):
         """
         Инициализирует асинхронный клиент.
 
         :param timeout: Таймаут ожидания ответа от сервера в секундах.
+        :param cooldown_minutes: Время в минутах, на которое блокируются запросы после сбоя.
         """
         self.base_url = "https://nspd.gov.ru"
         self._transformer = Transformer.from_crs(CRS_WEB_MERCATOR, CRS_WGS84, always_xy=True)
@@ -48,6 +62,17 @@ class NspdClient:
             timeout=timeout,
             verify=False,
         )
+
+        # --- ПОЛЯ ДЛЯ CIRCUIT BREAKER ---
+        self._circuit_state = CircuitState.CLOSED
+        self._cooldown_period = timedelta(minutes=cooldown_minutes)
+        self._last_failure_time: datetime | None = None
+        # Блокировка, чтобы избежать гонки состояний при одновременных запросах
+        self._lock = asyncio.Lock()
+        # Счетчик последовательных ошибок
+        self._failure_count = 0
+        # Порог ошибок для размыкания цепи
+        self._failure_threshold = 2
 
     def _transform_polygon(
         self, polygon_coords: list[list[list[float]]]
@@ -112,6 +137,23 @@ class NspdClient:
         По умолчанию 'lon,lat'.
         :return: Экземпляр `CadastralObject` или `None` в случае ошибки.
         """
+        # --- НАЧАЛО ЛОГИКИ CIRCUIT BREAKER ---
+        async with self._lock:
+            if self._circuit_state == CircuitState.OPEN:
+                # Проверяем, не пора ли попробовать снова
+                if datetime.now() > self._last_failure_time + self._cooldown_period:
+                    self._circuit_state = CircuitState.HALF_OPEN
+                    logger.warning(
+                        "NSPD_CLIENT: Cooldown over. Circuit is now HALF-OPEN. Trying one request..."
+                    )
+                else:
+                    # Еще не время, быстро отказываем
+                    logger.warning(
+                        f"NSPD_CLIENT: Circuit is OPEN. Failing fast for {cadastral_number}."
+                    )
+                    return None
+        # --- КОНЕЦ ЛОГИКИ CIRCUIT BREAKER ---
+
         print(f"Ищу информацию по кадастровому номеру: {cadastral_number}")
         search_params = {"thematicSearchId": 1, "query": cadastral_number}
         search_url = f"/api/geoportal/v2/search/geoportal?{urlencode(search_params)}"
@@ -119,6 +161,9 @@ class NspdClient:
             response = await self.client.get(search_url)
             response.raise_for_status()
             data = response.json()
+
+            # --- Обработка УСПЕХА ---
+            await self._handle_success()
 
             if not data.get("data") or not data["data"].get("features"):
                 print(f"-> Объект с номером {cadastral_number} не найден.")
@@ -192,6 +237,7 @@ class NspdClient:
             json.JSONDecodeError,
         ) as e:
             print(f"-> Произошла сетевая ошибка или ошибка API: {type(e).__name__}")
+            await self._handle_failure()
             return None
         except Exception:
             print(
@@ -199,6 +245,33 @@ class NspdClient:
             )
             traceback.print_exc()
             return None
+
+    async def _handle_success(self):
+        """Обрабатывает успешный запрос, сбрасывая счетчики и замыкая цепь."""
+        async with self._lock:
+            if self._circuit_state == CircuitState.HALF_OPEN:
+                logger.info("NSPD_CLIENT: Success on HALF-OPEN. Circuit is now CLOSED.")
+            self._failure_count = 0
+            self._circuit_state = CircuitState.CLOSED
+
+    async def _handle_failure(self):
+        """Обрабатывает сбойный запрос, увеличивая счетчик или размыкая цепь."""
+        async with self._lock:
+            if self._circuit_state == CircuitState.HALF_OPEN:
+                # Если тест в полуразомкнутом состоянии провалился, снова размыкаем
+                self._circuit_state = CircuitState.OPEN
+                self._last_failure_time = datetime.now()
+                logger.error(
+                    f"NSPD_CLIENT: Failure on HALF-OPEN. Circuit is OPEN again for {self._cooldown_period}."
+                )
+            else:
+                self._failure_count += 1
+                if self._failure_count >= self._failure_threshold:
+                    self._circuit_state = CircuitState.OPEN
+                    self._last_failure_time = datetime.now()
+                    logger.error(
+                        f"NSPD_CLIENT: Failure threshold reached. Circuit is now OPEN for {self._cooldown_period}."
+                    )
 
     async def close(self):
         """Корректно закрывает сессию httpx клиента."""

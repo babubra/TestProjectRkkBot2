@@ -1,3 +1,5 @@
+import asyncio
+import json
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -11,6 +13,8 @@ from app_bot.crm_service.crm_client import CRMClient
 from app_bot.database import crud
 from app_bot.keyboards.common_keyboards import get_main_menu_kb
 from app_bot.keyboards.view_ticket_keyboards import get_deal_action_kb
+from app_bot.nspd_service.nspd_client import NspdClient
+from app_bot.nspd_service.schemas import CadastralObject
 
 
 logger = logging.getLogger(__name__)
@@ -118,7 +122,7 @@ DEAL_STATUS_ICONS = {
     "152": "🚗",  # Выезд геодезиста
     "160": "🚫",  # Пример: Отменено
 }
-DEFAULT_STATUS_ICON = "🟢"  # Иконка по умолчанию - выезд завершен успешно
+DEFAULT_STATUS_ICON = "🔵"
 
 
 def strip_html_tags(text: str) -> str:
@@ -131,12 +135,17 @@ def strip_html_tags(text: str) -> str:
     return re.sub("<[^<]+?>", "", text).strip()
 
 
+def create_2gis_link(lon: float, lat: float) -> str:
+    """Создает стандартную веб-ссылку на точку на карте 2ГИС."""
+    return f"https://2gis.ru/geo/{lon},{lat}"
+
+
 async def get_and_format_deals_from_crm(
     crm_client: CRMClient, start_date: date, end_date: date
 ) -> list[dict]:
     """
     Универсальная функция для получения и форматирования списка сделок за период.
-    Возвращает список словарей, где каждый словарь содержит 'text' и 'reply_markup'.
+    Обогащает кадастровые номера ссылками на 2ГИС **только в описании сделки**.
     """
     logger.info(f"Запрос и форматирование сделок для диапазона: {start_date} - {end_date}")
 
@@ -145,20 +154,48 @@ async def get_and_format_deals_from_crm(
     )
 
     if not deals:
-        # Возвращаем словарь, чтобы соответствовать новому формату
         return [{"text": "✅ На выбранную дату заявок не найдено.", "reply_markup": None}]
 
     formatted_messages = []
     for deal in deals:
+        # 1. Подготавливаем карту координат из service_data
+        coord_map = {}
+        if deal.service_data:
+            for cad_object in deal.service_data:
+                if cad_object.cadastral_number and cad_object.centroid_wgs84:
+                    coord_map[cad_object.cadastral_number] = cad_object.centroid_wgs84
+
+        # 2. Обрабатываем описание отдельно, чтобы применить замену только к нему
+        enriched_description = ""
+        if deal.description:
+            # Сначала очищаем описание от HTML
+            clean_description = strip_html_and_preserve_breaks(deal.description)
+
+            # Если есть координаты и текст описания, применяем замену
+            if coord_map and clean_description:
+                pattern = re.compile("|".join(re.escape(kn) for kn in coord_map.keys()))
+
+                def replacer(match):
+                    cadastral_number = match.group(0)
+                    coords = coord_map.get(cadastral_number)
+                    if coords:
+                        link = create_2gis_link(lon=coords[0], lat=coords[1])
+                        return f'<a href="{link}">{cadastral_number}</a>'
+                    return cadastral_number
+
+                enriched_description = pattern.sub(replacer, clean_description)
+            else:
+                # Если координат нет, используем просто очищенное описание
+                enriched_description = clean_description
+
+        # 3. Собираем итоговое сообщение из частей
         message_parts = []
-        # ... (весь ваш код по формированию message_parts остается без изменений) ...
-        # --- 1. Формируем заголовок со ссылкой и датой ---
+
         icon = DEAL_STATUS_ICONS.get(deal.state.id, DEFAULT_STATUS_ICON)
         if deal.visit_result and isinstance(deal.visit_result, str):
             stripped_result = deal.visit_result.strip()
             if stripped_result:
-                secondary_icon = stripped_result[0]
-                icon += secondary_icon
+                icon += stripped_result[0]
 
         deal_url = urljoin(crm_client.base_url, f"/deals/{deal.id}/card/")
         link_text = f"{icon} Сделка {deal.id}."
@@ -166,43 +203,98 @@ async def get_and_format_deals_from_crm(
 
         visit_date_str = ""
         if deal.visit_datetime:
-            if deal.visit_datetime.time() == datetime.min.time():
-                format_string = "%d.%m.%Y"
-            else:
-                format_string = "%d.%m.%Y %H:%M"
-            visit_date_str = f"<b>{deal.visit_datetime.strftime(format_string)}</b>"
+            fmt = (
+                "%d.%m.%Y"
+                if deal.visit_datetime.time() == datetime.min.time()
+                else "%d.%m.%Y %H:%M"
+            )
+            visit_date_str = f"<b>{deal.visit_datetime.strftime(fmt)}</b>"
 
-        full_header = f"{header_link} {visit_date_str}".strip()
-        message_parts.append(full_header)
-
-        # --- 2. Название сделки ---
+        # Добавляем заголовок
+        message_parts.append(f"{header_link} {visit_date_str}".strip())
+        # Добавляем НАЗВАНИЕ БЕЗ ИЗМЕНЕНИЙ
         message_parts.append(f"<b>{deal.name}</b>")
+        # Добавляем наше новое, обогащенное ОПИСАНИЕ
+        if enriched_description:
+            message_parts.append(enriched_description)
 
-        # --- 3. Описание сделки ---
-        if deal.description:
-            clean_description = strip_html_and_preserve_breaks(deal.description)
-            if clean_description:
-                message_parts.append(clean_description)
-
-        # --- 4. Исполнители ---
+        # Добавляем остальные части
         if deal.executors:
             executor_names = ", ".join([e.name for e in deal.executors])
             message_parts.append(f"<b>Исполнители:</b> {executor_names}")
 
-        # --- 5. Файлы со ссылками ---
         if deal.files_for_visit:
-            file_links = []
-            for file in deal.files_for_visit:
-                file_url = urljoin(crm_client.base_url, f"{file.path}")
-                file_links.append(f'<a href="{file_url}">{file.name}</a>')
-
+            file_links = [
+                f'<a href="{urljoin(crm_client.base_url, f.path)}">{f.name}</a>'
+                for f in deal.files_for_visit
+            ]
             files_str = "\n".join(file_links)
             message_parts.append(f"<b>Файлы:</b>\n{files_str}")
 
-        final_message = "\n".join(message_parts)
+        # Собираем всё вместе
+        final_message = "\n\n".join(part for part in message_parts if part)
 
-        # --- Собираем клавиатуру и добавляем всё в итоговый список ---
+        # 4. Формируем итоговый объект для отправки
         keyboard = get_deal_action_kb(deal_id=deal.id)
         formatted_messages.append({"text": final_message, "reply_markup": keyboard})
 
     return formatted_messages
+
+
+async def get_cadastral_data_as_json(description: str, nspd_client: NspdClient) -> str | None:
+    """
+    Извлекает кадастровые номера из текста, запрашивает по ним данные
+    через NspdClient и возвращает результат в виде JSON-строки.
+
+    Args:
+        description: Текст для поиска кадастровых номеров.
+        nspd_client: Экземпляр клиента для работы с НСПД.
+
+    Returns:
+        JSON-строка со списком найденных объектов или None, если ничего не найдено.
+    """
+    try:
+        if not description:
+            return None
+
+        # Регулярное выражение для кадастровых номеров (учитывая 1-5 цифр в конце)
+        cadastral_num_pattern = re.compile(r"\b\d{2}:\d{2}:\d{6,7}:\d{1,5}\b")
+
+        found_numbers = cadastral_num_pattern.findall(description)
+
+        all_unique_numbers = list(set(found_numbers))
+
+        if not all_unique_numbers:
+            logger.info("Кадастровые номера в описании не найдены.")
+            return None
+
+        logger.info(f"Найдены КН для обработки: {all_unique_numbers}")
+
+        # Асинхронно запрашиваем информацию по всем найденным номерам
+        tasks = [nspd_client.get_object_info(num) for num in all_unique_numbers]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        successful_results: list[CadastralObject] = []
+        for i, res in enumerate(results):
+            if isinstance(res, CadastralObject):
+                successful_results.append(res)
+            elif isinstance(res, Exception):
+                logger.error(f"Ошибка при запросе КН {all_unique_numbers[i]}: {res}")
+            # Если res is None, объект просто не найден, это не считается ошибкой.
+
+        if not successful_results:
+            logger.warning("Не удалось получить данные ни по одному из КН.")
+            return None
+
+        # Сериализуем успешные результаты в JSON
+        data_to_serialize = [obj.model_dump(mode="json") for obj in successful_results]
+        json_string = json.dumps(data_to_serialize, ensure_ascii=False)
+
+        logger.info(
+            f"Успешно подготовлены данные по {len(successful_results)} кадастровым объектам."
+        )
+        return json_string
+
+    except Exception as e:
+        logger.error(f"Критическая ошибка в задаче обработки КН: {e}", exc_info=True)
+        return None

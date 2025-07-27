@@ -1,10 +1,13 @@
 # Файл: app_bot/crm_service/schemas.py
 
+import json
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from app_bot.config.config import get_env_settings
+from app_bot.nspd_service.schemas import CadastralObject
 
 
 settings = get_env_settings()
@@ -120,6 +123,10 @@ class Deal(BaseSchema):
 
     # --- Поля с алиасами для кастомных полей Мегаплана ---
 
+    service_data: Optional[list[CadastralObject]] = Field(
+        default=None, alias="Category1000076CustomFieldServiceData"
+    )
+
     address: str | None = Field(
         default=None, alias="Category1000076CustomFieldPredmetRabotAdres"
     )
@@ -160,6 +167,29 @@ class Deal(BaseSchema):
     """ID пользователей Telegram, привязанных к сделке. Corresponds to JSON key: 'Category1000076CustomFieldSluzhebniyTelegramuserid'"""
 
     # --- Валидаторы для преобразования данных ---
+
+    @field_validator("service_data", mode="before")
+    @classmethod
+    def parse_service_data_from_json(cls, v):
+        """
+        Парсит JSON-строку из CRM-поля в список Pydantic-моделей CadastralObject.
+        Этот валидатор сработает до основной валидации поля.
+        """
+        # Если пришла пустая строка, None или это уже не строка, возвращаем None.
+        if not v or not isinstance(v, str):
+            return None
+
+        try:
+            # Превращаем JSON-строку в список python-словарей
+            data_list = json.loads(v)
+            if not isinstance(data_list, list):
+                return None
+
+            # Превращаем каждый словарь в полноценный объект CadastralObject
+            return [CadastralObject.model_validate(item) for item in data_list]
+        except (json.JSONDecodeError, TypeError):
+            # Если в поле хранится некорректный JSON, просто возвращаем None.
+            return None
 
     @field_validator("visit_datetime", mode="before")
     @classmethod

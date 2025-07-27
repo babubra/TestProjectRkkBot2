@@ -2,7 +2,7 @@
 ==================================================
 
 Корень проекта: c:\Users\babubra\Projects\TestProjectRkkBot2
-Всего скопировано файлов: 45
+Всего скопировано файлов: 46
 Целевая папка: c:\Users\babubra\Projects\TestProjectRkkBot2\app_bot\temp\exported_files
 
 ПРАВИЛА ПЕРЕИМЕНОВАНИЯ:
@@ -48,6 +48,7 @@ app_bot\keyboards\view_ticket_keyboards.py
 app_bot\middlewares\__init__.py -> __init__middlewares.py
 app_bot\middlewares\crm_client_middleware.py
 app_bot\middlewares\db_session_middleware.py
+app_bot\middlewares\nspd_client_middleware.py
 app_bot\nspd_service\__init__.py -> __init__nspd_service.py
 app_bot\nspd_service\nspd_client.py
 app_bot\nspd_service\schemas.py -> schemas_1.py

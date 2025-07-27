@@ -8,6 +8,8 @@ from aiogram.enums import ParseMode
 from app_bot.crm_service.crm_client import CRMClient
 from app_bot.middlewares.crm_client_middleware import CrmClientMiddleware
 from app_bot.middlewares.db_session_middleware import DbSessionMiddleware
+from app_bot.middlewares.nspd_client_middleware import NspdClientMiddleware
+from app_bot.nspd_service.nspd_client import NspdClient
 
 from .config.config import get_env_settings
 from .database.engine import DatabaseManager
@@ -36,6 +38,7 @@ async def main() -> None:
         password=env_settings.MEGAPLAN_PASSWORD,
         program_id=env_settings.MEGAPLAN_PROGRAM_ID,
     )
+    nspd_client = NspdClient(timeout=5)
     db_manager = DatabaseManager(url=env_settings.DATABASE_URL)
     await db_manager.create_all()
 
@@ -46,6 +49,7 @@ async def main() -> None:
 
     dp.update.middleware(DbSessionMiddleware(session_pool=db_manager.session_factory))
     dp.update.middleware(CrmClientMiddleware(crm_client=crm_client))
+    dp.update.middleware(NspdClientMiddleware(nspd_client=nspd_client))
 
     dp.include_router(admin_router)
     dp.include_router(common_router)
@@ -62,17 +66,11 @@ async def main() -> None:
         logger.error(f"Ошибка при работе бота: {e}", exc_info=True)
     finally:
         logger.info("Остановка бота...")
-        # Корректное закрытие сессии бота
         await bot.session.close()
+        if nspd_client:
+            await nspd_client.close()
+            logger.info("Сессия NSPD клиента закрыта.")
         logger.info("Сессия бота закрыта.")
-        # # Корректное закрытие сессии CRM клиента
-        # if crm_client:  # Добавим проверку, что crm_client был успешно инициализирован
-        #     await crm_client.close_session()
-        #     logger.info("Сессия CRM клиента закрыта.")
-        # # Корректное освобождение ресурсов DatabaseManager
-        # if db_manager:  # Добавим проверку, что db_manager был успешно инициализирован
-        #     await db_manager.dispose()
-        #     logger.info("Пул соединений с БД освобожден.")
         logger.info("Бот успешно остановлен.")
 
 
@@ -81,23 +79,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.info("Выполнение прервано пользователем (KeyboardInterrupt/SystemExit).")
-
-
-# async with db_manager.session() as session:
-#     all_users_sequence = await get_users(session, limit=10)
-# print(f"ВСЕ ЮЗЕРЫ {all_users_sequence}")
-
-# async with db_manager.session() as session:
-#     app_settings = await get_app_settings(session=session)
-#     print(app_settings.default_daily_limit)
-#     target_date = datetime.date.fromisoformat("2024-05-27")
-#     daily_limit_override = await set_daily_limit_override(
-#         session=session, target_date=target_date, limit=66
-#     )
-#     print(daily_limit_override.daily_limit)
-# crm_client = CRMClient(
-#     base_url=env_settings.MEGAPLAN_BASE_URL,
-#     username=env_settings.MEGAPLAN_LOGIN,
-#     password=env_settings.MEGAPLAN_PASSWORD,
-#     program_id=env_settings.MEGAPLAN_PROGRAM_ID,
-# )
