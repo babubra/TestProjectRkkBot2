@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app_bot.config.config import get_env_settings
 from app_bot.crm_service.crm_client import CRMClient
+from app_bot.nspd_service.nspd_client import NspdClient
 from app_bot.utils.ui_utils import get_and_format_deals_from_crm, get_main_menu_message
 
 
@@ -27,16 +28,17 @@ class ViewTicketsByDateFSM(StatesGroup):
 
 @view_tickets_router.callback_query(F.data == "view_tickets_today")
 async def view_today_deals_handler(
-    query: CallbackQuery, crm_client: CRMClient, session: AsyncSession
+    query: CallbackQuery,
+    crm_client: CRMClient,
+    session: AsyncSession,
+    nspd_client: NspdClient,  # Добавляем nspd_client
 ):
     await query.message.answer("Загружаю заявки на сегодня...")
     await query.answer()
 
     today = datetime.now().date()
-
-    # 1. Вызываем функцию загрузки, которая вернет список словарей
     messages_to_send = await get_and_format_deals_from_crm(
-        crm_client=crm_client, start_date=today, end_date=today
+        crm_client=crm_client, start_date=today, end_date=today, nspd_client=nspd_client
     )
 
     # 2. Отправляем все, что она вернула, используя распаковку словаря
@@ -53,19 +55,23 @@ async def view_today_deals_handler(
 
 @view_tickets_router.callback_query(F.data == "view_tickets_tomorrow")
 async def view_tomorrow_deals_handler(
-    query: CallbackQuery, crm_client: CRMClient, session: AsyncSession
+    query: CallbackQuery,
+    crm_client: CRMClient,
+    session: AsyncSession,
+    # Добавляем nspd_client в параметры
+    nspd_client: NspdClient,
 ):
     await query.message.answer("Загружаю заявки на завтра...")
     await query.answer()
 
     tomorrow = datetime.now(APP_TIMEZONE).date() + timedelta(days=1)
 
-    # 1. Вызываем ту же универсальную функцию
+    # Вызываем универсальную функцию, передавая nspd_client
     messages_to_send = await get_and_format_deals_from_crm(
-        crm_client=crm_client, start_date=tomorrow, end_date=tomorrow
+        crm_client=crm_client, start_date=tomorrow, end_date=tomorrow, nspd_client=nspd_client
     )
 
-    # 2. Отправляем все, что она вернула
+    # Отправляем все, что она вернула
     for item in messages_to_send:
         await query.message.answer(
             text=item["text"],
@@ -73,7 +79,7 @@ async def view_tomorrow_deals_handler(
             disable_web_page_preview=True,
         )
 
-    # 3. Возвращаем в главное меню
+    # Возвращаем в главное меню
     await get_main_menu_message(query.message, session, crm_client)
 
 
@@ -90,7 +96,12 @@ async def view_other_date_deals_start(query: CallbackQuery, state: FSMContext):
 
 @view_tickets_router.message(ViewTicketsByDateFSM.waiting_for_date, F.text)
 async def process_date_for_view(
-    message: Message, state: FSMContext, crm_client: CRMClient, session: AsyncSession
+    message: Message,
+    state: FSMContext,
+    crm_client: CRMClient,
+    session: AsyncSession,
+    # Добавляем nspd_client в параметры
+    nspd_client: NspdClient,
 ):
     """
     Обрабатывает введенную пользователем дату, загружает и отображает заявки.
@@ -109,19 +120,21 @@ async def process_date_for_view(
 
     await message.answer(f"⏳ Загружаю заявки на <b>{target_date.strftime('%d.%m.%Y')}</b>...")
 
-    # Вызываем универсальную функцию для получения и форматирования сделок
+    # Вызываем универсальную функцию, передавая nspd_client
     messages_to_send = await get_and_format_deals_from_crm(
-        crm_client=crm_client, start_date=target_date, end_date=target_date
+        crm_client=crm_client,
+        start_date=target_date,
+        end_date=target_date,
+        nspd_client=nspd_client,
     )
 
     # Отправляем сообщения пользователю
-    if messages_to_send:
-        for item in messages_to_send:
-            await message.answer(
-                text=item["text"],
-                reply_markup=item["reply_markup"],
-                disable_web_page_preview=True,
-            )
+    for item in messages_to_send:
+        await message.answer(
+            text=item["text"],
+            reply_markup=item["reply_markup"],
+            disable_web_page_preview=True,
+        )
 
     # Возвращаемся в главное меню, чтобы пользователь мог продолжить работу
     await get_main_menu_message(message, session, crm_client)

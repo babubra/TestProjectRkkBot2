@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app_bot.config.config import get_env_settings
 from app_bot.crm_service.crm_client import CRMClient
+from app_bot.crm_service.schemas import Deal
 from app_bot.database import crud
 from app_bot.keyboards.common_keyboards import get_main_menu_kb
 from app_bot.keyboards.view_ticket_keyboards import get_deal_action_kb
@@ -140,6 +141,53 @@ def create_2gis_link(lon: float, lat: float) -> str:
     return f"https://2gis.ru/geo/{lon},{lat}"
 
 
+async def _enrich_deal_with_nspd_data(
+    deal: Deal, nspd_client: NspdClient
+) -> list[CadastralObject]:
+    """
+    Проверяет сделку на наличие недостающих данных о КН и дозапрашивает их.
+    Возвращает ПОЛНЫЙ список кадастровых объектов (старые + новые).
+    """
+    description = strip_html_and_preserve_breaks(deal.description or "")
+    if not description:
+        return deal.service_data or []
+
+    # 1. Находим все кадастровые номера в описании
+    cadastral_num_pattern = re.compile(r"\b\d{2}:\d{2}:\d{6,7}:\d{1,5}\b")
+    required_numbers = set(cadastral_num_pattern.findall(description))
+
+    if not required_numbers:
+        return deal.service_data or []
+
+    # 2. Находим номера, по которым уже есть информация
+    known_objects = deal.service_data or []
+    known_numbers = {obj.cadastral_number for obj in known_objects}
+
+    # 3. Определяем, что нужно запросить
+    numbers_to_fetch = list(required_numbers - known_numbers)
+
+    # Если ничего нового запрашивать не надо, возвращаем то, что было
+    if not numbers_to_fetch:
+        return known_objects
+
+    logger.info(f"Для сделки {deal.id} требуется запросить данные по КН: {numbers_to_fetch}")
+
+    # 4. Асинхронно запрашиваем недостающие данные
+    tasks = [nspd_client.get_object_info(num) for num in numbers_to_fetch]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    newly_fetched_objects = []
+    for res in results:
+        if isinstance(res, CadastralObject):
+            newly_fetched_objects.append(res)
+        elif isinstance(res, Exception):
+            logger.error(f"Ошибка при запросе данных от NSPD: {res}")
+
+    # 5. Объединяем старые и новые данные
+    all_objects = known_objects + newly_fetched_objects
+    return all_objects
+
+
 async def get_and_format_deals_from_crm(
     crm_client: CRMClient,
     start_date: date,
@@ -148,7 +196,7 @@ async def get_and_format_deals_from_crm(
 ) -> list[dict]:
     """
     Универсальная функция для получения и форматирования списка сделок за период.
-    Обогащает кадастровые номера ссылками на 2ГИС **только в описании сделки**.
+    Обогащает кадастровые номера ссылками, при необходимости дозапрашивая данные.
     """
     logger.info(f"Запрос и форматирование сделок для диапазона: {start_date} - {end_date}")
 
@@ -161,20 +209,39 @@ async def get_and_format_deals_from_crm(
 
     formatted_messages = []
     for deal in deals:
-        # 1. Подготавливаем карту координат из service_data
+        # Получаем полный и актуальный список кадастровых объектов
+        all_cadastral_objects = await _enrich_deal_with_nspd_data(deal, nspd_client)
+
+        # Если данные были обновлены, запускаем фоновую задачу для сохранения в CRM
+        if all_cadastral_objects and all_cadastral_objects != deal.service_data:
+            logger.info(
+                f"Данные для сделки {deal.id} были обогащены, запускаю обновление в CRM..."
+            )
+            # Сериализуем данные в JSON
+            json_data_to_save = json.dumps(
+                [obj.model_dump(mode="json") for obj in all_cadastral_objects],
+                ensure_ascii=False,
+            )
+            # Создаем фоновую задачу, которая не будет блокировать ответ пользователю
+            asyncio.create_task(
+                crm_client.update_deal(
+                    deal.id, {"Category1000076CustomFieldServiceData": json_data_to_save}
+                )
+            )
+
+        # 1. Подготавливаем карту координат из ПОЛНОГО списка объектов
         coord_map = {}
-        if deal.service_data:
-            for cad_object in deal.service_data:
+        if all_cadastral_objects:
+            for cad_object in all_cadastral_objects:
                 if cad_object.cadastral_number and cad_object.centroid_wgs84:
                     coord_map[cad_object.cadastral_number] = cad_object.centroid_wgs84
 
-        # 2. Обрабатываем описание отдельно, чтобы применить замену только к нему
+        # ... остальная часть функции остается почти без изменений ...
+
+        # 2. Обрабатываем описание
         enriched_description = ""
         if deal.description:
-            # Сначала очищаем описание от HTML
             clean_description = strip_html_and_preserve_breaks(deal.description)
-
-            # Если есть координаты и текст описания, применяем замену
             if coord_map and clean_description:
                 pattern = re.compile("|".join(re.escape(kn) for kn in coord_map.keys()))
 
@@ -188,10 +255,9 @@ async def get_and_format_deals_from_crm(
 
                 enriched_description = pattern.sub(replacer, clean_description)
             else:
-                # Если координат нет, используем просто очищенное описание
                 enriched_description = clean_description
 
-        # 3. Собираем итоговое сообщение из частей
+        # 3. Собираем итоговое сообщение
         message_parts = []
 
         icon = DEAL_STATUS_ICONS.get(deal.state.id, DEFAULT_STATUS_ICON)
@@ -213,15 +279,11 @@ async def get_and_format_deals_from_crm(
             )
             visit_date_str = f"<b>{deal.visit_datetime.strftime(fmt)}</b>"
 
-        # Добавляем заголовок
         message_parts.append(f"{header_link} {visit_date_str}".strip())
-        # Добавляем НАЗВАНИЕ БЕЗ ИЗМЕНЕНИЙ
         message_parts.append(f"<b>{deal.name}</b>")
-        # Добавляем наше новое, обогащенное ОПИСАНИЕ
         if enriched_description:
             message_parts.append(enriched_description)
 
-        # Добавляем остальные части
         if deal.executors:
             executor_names = ", ".join([e.name for e in deal.executors])
             message_parts.append(f"<b>Исполнители:</b> {executor_names}")
@@ -234,10 +296,8 @@ async def get_and_format_deals_from_crm(
             files_str = "\n".join(file_links)
             message_parts.append(f"<b>Файлы:</b>\n{files_str}")
 
-        # Собираем всё вместе
         final_message = "\n\n".join(part for part in message_parts if part)
 
-        # 4. Формируем итоговый объект для отправки
         keyboard = get_deal_action_kb(deal_id=deal.id)
         formatted_messages.append({"text": final_message, "reply_markup": keyboard})
 
