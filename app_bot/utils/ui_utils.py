@@ -228,6 +228,7 @@ async def get_and_format_deals_from_crm(
                     deal.id, {"Category1000076CustomFieldServiceData": json_data_to_save}
                 )
             )
+            deal.service_data = all_cadastral_objects
 
         # 1. Подготавливаем карту координат из ПОЛНОГО списка объектов
         coord_map = {}
@@ -235,8 +236,6 @@ async def get_and_format_deals_from_crm(
             for cad_object in all_cadastral_objects:
                 if cad_object.cadastral_number and cad_object.centroid_wgs84:
                     coord_map[cad_object.cadastral_number] = cad_object.centroid_wgs84
-
-        # ... остальная часть функции остается почти без изменений ...
 
         # 2. Обрабатываем описание
         enriched_description = ""

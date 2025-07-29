@@ -18,6 +18,7 @@ class EnvSettings(BaseSettings):
     MEGAPLAN_PROGRAM_ID: int
     APP_TIMEZONE_OFFSET: int
     PERPLEXITY_API_KEY: str
+    FRONTEND_BASE_URL: str
 
     model_config = SettingsConfigDict(
         env_file=".env",
