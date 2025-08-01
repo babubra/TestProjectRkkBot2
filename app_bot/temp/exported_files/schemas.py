@@ -249,3 +249,21 @@ class DealCreationSchema(BaseModel):
 
     # Передаем чистый словарь в метод клиента
     # created_deal = await crm_client.create_deal(**final_data_for_api)
+
+
+class MapLocation(BaseModel):
+    """Модель местоположения для карты."""
+
+    cadastral_number: str
+    coords: list[float]  # [longitude, latitude]
+
+
+class MapDealData(BaseModel):
+    """Модель данных о сделке для отображения на карте."""
+
+    deal_id: str
+    deal_url: str
+    deal_name: str
+    visit_time: str  # Уже отформатированное время для показа
+    executors: list[str]  # Просто список имен
+    locations: list[MapLocation]  # Список кадастровых объектов для этой сделки

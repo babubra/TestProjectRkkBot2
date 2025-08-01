@@ -11,13 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app_bot.config.config import get_env_settings
 from app_bot.crm_service.crm_client import CRMClient
-from app_bot.crm_service.schemas import Deal
+from app_bot.crm_service.schemas import Deal, MapDealData, MapLocation
 from app_bot.database import crud
 from app_bot.keyboards.common_keyboards import get_main_menu_kb
 from app_bot.keyboards.view_ticket_keyboards import get_deal_action_kb
 from app_bot.nspd_service.nspd_client import NspdClient
 from app_bot.nspd_service.schemas import CadastralObject
-from app_bot.schemas import MapDealData, MapLocation
 
 
 logger = logging.getLogger(__name__)
@@ -204,21 +203,10 @@ async def prepare_deal_view_data(
     user_telegram_id: int,
 ) -> dict[str, Any]:
     """
-    Готовит все данные для отображения сделок: текстовые сообщения и ссылку на карту.
-
-    1. Получает сделки из CRM.
-    2. Обогащает их данными из NSPD.
-    3. В одном цикле формирует:
-        - Список сообщений для Telegram.
-        - Список данных для карты.
-    4. Если есть данные для карты, создает запись в БД и генерирует уникальную ссылку.
-
-    Returns:
-        Словарь вида:
-        {
-            "messages_to_send": list[dict],
-            "map_url": str | None
-        }
+    Готовит все данные для отображения сделок:
+    1. Форматирует текстовые сообщения для Telegram.
+    2. Готовит данные для карты и генерирует уникальную ссылку.
+    Возвращает словарь с сообщениями и ссылкой на карту.
     """
     logger.info(f"Подготовка данных для отображения сделок за {start_date} - {end_date}")
 
@@ -236,11 +224,13 @@ async def prepare_deal_view_data(
 
     messages_to_send = []
     data_for_map = []
+    map_url = None
 
     for deal in deals:
-        # Логика обогащения и сохранения данных NSPD остается прежней
+        # --- Шаг 1: Обогащение данных и сохранение в CRM (фоном) ---
         all_cadastral_objects = await _enrich_deal_with_nspd_data(deal, nspd_client)
         if all_cadastral_objects and all_cadastral_objects != deal.service_data:
+            logger.info(f"Данные для сделки {deal.id} обогащены, обновляю в CRM...")
             json_data_to_save = json.dumps(
                 [obj.model_dump(mode="json") for obj in all_cadastral_objects],
                 ensure_ascii=False,
@@ -252,7 +242,7 @@ async def prepare_deal_view_data(
             )
             deal.service_data = all_cadastral_objects
 
-        # --- Часть 1: Готовим текстовое сообщение (как и раньше) ---
+        # --- Шаг 2: Форматирование сообщения для Telegram ---
         coord_map = {}
         if all_cadastral_objects:
             for cad_object in all_cadastral_objects:
@@ -261,104 +251,74 @@ async def prepare_deal_view_data(
 
         enriched_name = deal.name
         enriched_description = ""
-
         if coord_map:
             pattern = re.compile("|".join(re.escape(kn) for kn in coord_map.keys()))
 
             def replacer(match):
-                cadastral_number = match.group(0)
-                coords = coord_map.get(cadastral_number)
-                if coords:
-                    link = create_2gis_link(lon=coords[0], lat=coords[1])
-                    return f'<a href="{link}">{cadastral_number}</a>'
-                return cadastral_number
+                cad_num = match.group(0)
+                coords = coord_map.get(cad_num)
+                link = create_2gis_link(lon=coords[0], lat=coords[1])
+                return f'<a href="{link}">{cad_num}</a>'
 
             enriched_name = pattern.sub(replacer, deal.name)
             if deal.description:
-                clean_description = strip_html_and_preserve_breaks(deal.description)
-                enriched_description = pattern.sub(replacer, clean_description)
+                enriched_description = pattern.sub(
+                    replacer, strip_html_and_preserve_breaks(deal.description)
+                )
         elif deal.description:
             enriched_description = strip_html_and_preserve_breaks(deal.description)
 
-        message_parts = []
         icon = DEAL_STATUS_ICONS.get(deal.state.id, DEFAULT_STATUS_ICON)
-        if deal.visit_result and isinstance(deal.visit_result, str):
-            stripped_result = deal.visit_result.strip()
-            if stripped_result:
-                icon += stripped_result[0]
+        if deal.visit_result:
+            icon += deal.visit_result.strip()[0] if deal.visit_result.strip() else ""
+
         deal_url = urljoin(crm_client.base_url, f"/deals/{deal.id}/card/")
         link_text = f"{icon} Сделка {deal.id}."
         header_link = f'<a href="{deal_url}">{link_text}</a>'
-        visit_date_str = ""
-        if deal.visit_datetime:
-            fmt = (
-                "%d.%m.%Y"
-                if deal.visit_datetime.time() == datetime.min.time()
-                else "%d.%m.%Y %H:%M"
-            )
-            visit_date_str = f"<b>{deal.visit_datetime.strftime(fmt)}</b>"
+        visit_date_str = (
+            f"<b>{deal.visit_datetime.strftime('%d.%m.%Y %H:%M')}</b>"
+            if deal.visit_datetime and deal.visit_datetime.time() != datetime.min.time()
+            else f"<b>{deal.visit_datetime.strftime('%d.%m.%Y')}</b>"
+            if deal.visit_datetime
+            else ""
+        )
 
-        message_parts.append(f"{header_link} {visit_date_str}".strip())
-        message_parts.append(f"<b>{enriched_name}</b>")
-        if enriched_description:
-            message_parts.append(enriched_description)
-        if deal.executors:
-            message_parts.append(
-                f"<b>Исполнители:</b> {', '.join([e.name for e in deal.executors])}"
-            )
-
+        message_parts = [
+            f"{header_link} {visit_date_str}".strip(),
+            f"<b>{enriched_name}</b>",
+            enriched_description,
+            f"<b>Исполнители:</b> {', '.join([e.name for e in deal.executors])}"
+            if deal.executors
+            else "",
+        ]
         final_message = "\n\n".join(part for part in message_parts if part)
         keyboard = get_deal_action_kb(deal_id=deal.id)
         messages_to_send.append({"text": final_message, "reply_markup": keyboard})
 
-        # --- Часть 2: Готовим данные для карты ---
-        deal_locations = [
-            MapLocation(cadastral_number=obj.cadastral_number, coords=obj.centroid_wgs84)
-            for obj in (all_cadastral_objects or [])
-            if obj.centroid_wgs84
-        ]
-
-        if deal_locations:
-            if deal.visit_datetime:
-                visit_time_str = (
-                    deal.visit_datetime.strftime("%H:%M")
-                    if deal.visit_datetime.time() != datetime.min.time()
-                    else "Весь день"
-                )
-            else:
-                visit_time_str = "Без времени"
-
-            data_for_map.append(
-                MapDealData(
-                    deal_id=deal.id,
-                    deal_url=deal_url,
-                    deal_name=deal.name,
-                    visit_time=visit_time_str,
-                    executors=[e.name for e in deal.executors],
-                    locations=deal_locations,
-                )
+        # --- Шаг 3: Подготовка данных для карты ---
+        if coord_map:
+            map_locations = [
+                MapLocation(cadastral_number=cn, coords=coords)
+                for cn, coords in coord_map.items()
+            ]
+            deal_for_map = MapDealData(
+                deal_id=deal.id,
+                deal_url=deal_url,
+                deal_name=deal.name,
+                visit_time=visit_date_str.replace("<b>", "").replace("</b>", ""),
+                executors=[e.name for e in deal.executors],
+                locations=map_locations,
             )
+            data_for_map.append(deal_for_map)
 
-    # --- Часть 3: После цикла создаем запрос на карту ---
-    map_url = None
+    # --- Шаг 4: Генерация ссылки на карту (если есть что показывать) ---
     if data_for_map:
-        try:
-            deals_json_string = json.dumps(
-                [deal.model_dump() for deal in data_for_map], ensure_ascii=False
-            )
-            token = await crud.create_map_request(
-                session=session,
-                user_telegram_id=user_telegram_id,
-                deals_data_json=deals_json_string,
-                expires_in_minutes=5,
-            )
-            map_url = urljoin(settings.FRONTEND_BASE_URL, f"/map/{token}")
-            logger.info(
-                f"Сгенерирована ссылка на карту для пользователя {user_telegram_id}: {map_url}"
-            )
-        except Exception as e:
-            logger.error(f"Не удалось создать запрос на карту: {e}", exc_info=True)
-            map_url = None  # В случае ошибки просто не будет ссылки
+        json_string = json.dumps(
+            [d.model_dump(mode="json") for d in data_for_map], ensure_ascii=False
+        )
+        token = await crud.create_map_request(session, user_telegram_id, json_string)
+        frontend_base_url = get_env_settings().FRONTEND_BASE_URL
+        map_url = f"{frontend_base_url}/map/{token}"
 
     return {"messages_to_send": messages_to_send, "map_url": map_url}
 

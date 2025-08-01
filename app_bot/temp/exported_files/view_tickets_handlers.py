@@ -10,6 +10,7 @@ from app_bot.config.config import get_env_settings
 from app_bot.crm_service.crm_client import CRMClient
 from app_bot.nspd_service.nspd_client import NspdClient
 from app_bot.utils.ui_utils import get_and_format_deals_from_crm, get_main_menu_message
+from app_bot.utils.ui_utils import get_main_menu_message, prepare_deal_view_data
 
 
 view_tickets_router = Router()
@@ -31,25 +32,44 @@ async def view_today_deals_handler(
     query: CallbackQuery,
     crm_client: CRMClient,
     session: AsyncSession,
-    nspd_client: NspdClient,  # Добавляем nspd_client
+    nspd_client: NspdClient,
 ):
     await query.message.answer("Загружаю заявки на сегодня...")
     await query.answer()
 
     today = datetime.now().date()
-    messages_to_send = await get_and_format_deals_from_crm(
-        crm_client=crm_client, start_date=today, end_date=today, nspd_client=nspd_client
+    # 1. Вызываем новую универсальную функцию
+    result = await prepare_deal_view_data(
+        crm_client=crm_client,
+        start_date=today,
+        end_date=today,
+        nspd_client=nspd_client,
+        session=session,
+        user_telegram_id=query.from_user.id,
     )
 
-    # 2. Отправляем все, что она вернула, используя распаковку словаря
-    for item in messages_to_send:
+    # 2. Отправляем сообщения со сделками
+    for item in result["messages_to_send"]:
         await query.message.answer(
             text=item["text"],
             reply_markup=item["reply_markup"],
             disable_web_page_preview=True,
         )
 
-    # 3. Возвращаем в главное меню
+    # 3. Отправляем ссылку на карту, если она есть
+    map_url = result.get("map_url")
+    if map_url:
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="📍 Открыть карту выездов", url=map_url)]]
+        )
+        await query.message.answer(
+            "🗺️ <b>Карта выездов готова!</b>\n\n"
+            "Нажмите на кнопку ниже, чтобы открыть интерактивную карту.\n"
+            "<i>Ссылка действительна 5 минут.</i>",
+            reply_markup=kb,
+        )
+
+    # 4. Возвращаем в главное меню
     await get_main_menu_message(query.message, session, crm_client)
 
 

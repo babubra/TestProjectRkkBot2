@@ -369,42 +369,31 @@ async def create_map_request(
     expires_in_minutes: int = 5,
 ) -> str:
     """
-    Создает новый запрос на карту, предварительно удаляя старые запросы этого же пользователя.
-
-    Args:
-        session: Сессия SQLAlchemy.
-        user_telegram_id: ID пользователя в Telegram.
-        deals_data_json: Сериализованные в JSON данные о сделках.
-        expires_in_minutes: Время жизни токена в минутах.
-
-    Returns:
-        Уникальный токен для доступа к карте.
+    Создает новую запись для запроса карты, предварительно удалив старые для этого пользователя.
+    Возвращает уникальный токен для ссылки.
     """
-    logger.info(f"Создание запроса на карту для пользователя {user_telegram_id}.")
-
-    # 1. Удаляем все предыдущие запросы от этого пользователя
+    # 1. Удаляем все предыдущие токены для этого пользователя
+    logger.info(f"Удаление старых токенов карты для пользователя {user_telegram_id}")
     delete_stmt = delete(MapRequest).where(MapRequest.user_telegram_id == user_telegram_id)
     await session.execute(delete_stmt)
-    logger.info(f"Старые запросы на карту для пользователя {user_telegram_id} удалены.")
 
-    # 2. Генерируем новый токен и время жизни
-    now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(minutes=expires_in_minutes)
-    request_token = str(uuid.uuid4())
+    # 2. Генерируем новые данные
+    token = str(uuid.uuid4())
+    # Устанавливаем UTC, т.к. это стандарт для серверного времени
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=expires_in_minutes)
 
-    # 3. Создаем новый объект запроса
+    # 3. Создаем новый запрос
     new_request = MapRequest(
-        request_token=request_token,
+        request_token=token,
         user_telegram_id=user_telegram_id,
         deals_data_json=deals_data_json,
         expires_at=expires_at,
     )
-
-    # 4. Сохраняем в БД
     session.add(new_request)
-    await session.flush()
+    await session.flush()  # Гарантирует, что объект будет записан в транзакцию
+    await session.refresh(new_request)
     logger.info(
-        f"Новый запрос на карту для пользователя {user_telegram_id} создан с токеном {request_token}."
+        f"Создан новый токен '{token}' для пользователя {user_telegram_id}, действителен до {expires_at}"
     )
 
-    return request_token
+    return token

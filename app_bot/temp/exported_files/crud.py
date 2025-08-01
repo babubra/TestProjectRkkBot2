@@ -1,13 +1,14 @@
 # Файл: app_bot/database/crud.py
 
 import logging
+import uuid
 from collections.abc import Sequence
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import AppSettings, DailyLimitOverride, Permission, User
+from .models import AppSettings, DailyLimitOverride, MapRequest, Permission, User
 
 
 logger = logging.getLogger(__name__)
@@ -359,3 +360,40 @@ async def get_actual_brigades_for_date(session: AsyncSession, target_date: date)
             f"Используется кол-во бригад по умолчанию для {target_date}: {settings.default_brigades_count}"
         )
         return settings.default_brigades_count
+
+
+async def create_map_request(
+    session: AsyncSession,
+    user_telegram_id: int,
+    deals_data_json: str,
+    expires_in_minutes: int = 5,
+) -> str:
+    """
+    Создает новую запись для запроса карты, предварительно удалив старые для этого пользователя.
+    Возвращает уникальный токен для ссылки.
+    """
+    # 1. Удаляем все предыдущие токены для этого пользователя
+    logger.info(f"Удаление старых токенов карты для пользователя {user_telegram_id}")
+    delete_stmt = delete(MapRequest).where(MapRequest.user_telegram_id == user_telegram_id)
+    await session.execute(delete_stmt)
+
+    # 2. Генерируем новые данные
+    token = str(uuid.uuid4())
+    # Устанавливаем UTC, т.к. это стандарт для серверного времени
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=expires_in_minutes)
+
+    # 3. Создаем новый запрос
+    new_request = MapRequest(
+        request_token=token,
+        user_telegram_id=user_telegram_id,
+        deals_data_json=deals_data_json,
+        expires_at=expires_at,
+    )
+    session.add(new_request)
+    await session.flush()  # Гарантирует, что объект будет записан в транзакцию
+
+    logger.info(
+        f"Создан новый токен '{token}' для пользователя {user_telegram_id}, действителен до {expires_at}"
+    )
+
+    return token

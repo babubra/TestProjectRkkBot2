@@ -9,7 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app_bot.config.config import get_env_settings
 from app_bot.crm_service.crm_client import CRMClient
 from app_bot.nspd_service.nspd_client import NspdClient
-from app_bot.utils.ui_utils import get_and_format_deals_from_crm, get_main_menu_message
+from app_bot.utils.ui_utils import (
+    get_main_menu_message,
+    prepare_deal_view_data,
+)
 
 
 view_tickets_router = Router()
@@ -31,25 +34,39 @@ async def view_today_deals_handler(
     query: CallbackQuery,
     crm_client: CRMClient,
     session: AsyncSession,
-    nspd_client: NspdClient,  # Добавляем nspd_client
+    nspd_client: NspdClient,
 ):
     await query.message.answer("Загружаю заявки на сегодня...")
     await query.answer()
 
-    today = datetime.now().date()
-    messages_to_send = await get_and_format_deals_from_crm(
-        crm_client=crm_client, start_date=today, end_date=today, nspd_client=nspd_client
+    today = datetime.now(APP_TIMEZONE).date()
+    result = await prepare_deal_view_data(
+        crm_client=crm_client,
+        start_date=today,
+        end_date=today,
+        nspd_client=nspd_client,
+        session=session,
+        user_telegram_id=query.from_user.id,
     )
 
-    # 2. Отправляем все, что она вернула, используя распаковку словаря
-    for item in messages_to_send:
+    for item in result["messages_to_send"]:
         await query.message.answer(
             text=item["text"],
             reply_markup=item["reply_markup"],
             disable_web_page_preview=True,
         )
 
-    # 3. Возвращаем в главное меню
+    map_url = result.get("map_url")
+    if map_url:
+        await query.message.answer(
+            "🗺️ <b>Карта выездов готова!</b>\n\n"
+            "Скопируйте ссылку ниже и откройте ее в браузере:\n"
+            f"<code>{map_url}</code>\n\n"
+            "<i>Ссылка действительна 5 минут.</i>",
+            # Явно отключаем превью, чтобы ссылка не выглядела как "сломанная"
+            disable_web_page_preview=True,
+        )
+
     await get_main_menu_message(query.message, session, crm_client)
 
 
@@ -58,28 +75,39 @@ async def view_tomorrow_deals_handler(
     query: CallbackQuery,
     crm_client: CRMClient,
     session: AsyncSession,
-    # Добавляем nspd_client в параметры
     nspd_client: NspdClient,
 ):
     await query.message.answer("Загружаю заявки на завтра...")
     await query.answer()
 
     tomorrow = datetime.now(APP_TIMEZONE).date() + timedelta(days=1)
-
-    # Вызываем универсальную функцию, передавая nspd_client
-    messages_to_send = await get_and_format_deals_from_crm(
-        crm_client=crm_client, start_date=tomorrow, end_date=tomorrow, nspd_client=nspd_client
+    result = await prepare_deal_view_data(
+        crm_client=crm_client,
+        start_date=tomorrow,
+        end_date=tomorrow,
+        nspd_client=nspd_client,
+        session=session,
+        user_telegram_id=query.from_user.id,
     )
 
-    # Отправляем все, что она вернула
-    for item in messages_to_send:
+    for item in result["messages_to_send"]:
         await query.message.answer(
             text=item["text"],
             reply_markup=item["reply_markup"],
             disable_web_page_preview=True,
         )
 
-    # Возвращаем в главное меню
+    map_url = result.get("map_url")
+    if map_url:
+        await query.message.answer(
+            "🗺️ <b>Карта выездов готова!</b>\n\n"
+            "Скопируйте ссылку ниже и откройте ее в браузере:\n"
+            f"<code>{map_url}</code>\n\n"
+            "<i>Ссылка действительна 5 минут.</i>",
+            # Явно отключаем превью, чтобы ссылка не выглядела как "сломанная"
+            disable_web_page_preview=True,
+        )
+
     await get_main_menu_message(query.message, session, crm_client)
 
 
@@ -100,7 +128,6 @@ async def process_date_for_view(
     state: FSMContext,
     crm_client: CRMClient,
     session: AsyncSession,
-    # Добавляем nspd_client в параметры
     nspd_client: NspdClient,
 ):
     """
@@ -108,33 +135,41 @@ async def process_date_for_view(
     """
     await state.clear()
     try:
-        # Преобразуем введенный текст в объект даты
         target_date = datetime.strptime(message.text.strip(), "%d.%m.%Y").date()
     except ValueError:
         await message.answer(
             "❌ <b>Ошибка:</b> Неверный формат даты. Пожалуйста, используйте <b>ДД.ММ.ГГГГ</b>."
         )
-        # Так как FSM уже очищен, просто возвращаемся в главное меню
         await get_main_menu_message(message, session, crm_client)
         return
 
     await message.answer(f"⏳ Загружаю заявки на <b>{target_date.strftime('%d.%m.%Y')}</b>...")
 
-    # Вызываем универсальную функцию, передавая nspd_client
-    messages_to_send = await get_and_format_deals_from_crm(
+    result = await prepare_deal_view_data(
         crm_client=crm_client,
         start_date=target_date,
         end_date=target_date,
         nspd_client=nspd_client,
+        session=session,
+        user_telegram_id=message.from_user.id,
     )
 
-    # Отправляем сообщения пользователю
-    for item in messages_to_send:
+    for item in result["messages_to_send"]:
         await message.answer(
             text=item["text"],
             reply_markup=item["reply_markup"],
             disable_web_page_preview=True,
         )
 
-    # Возвращаемся в главное меню, чтобы пользователь мог продолжить работу
+    map_url = result.get("map_url")
+    if map_url:
+        await message.answer(
+            "🗺️ <b>Карта выездов готова!</b>\n\n"
+            "Скопируйте ссылку ниже и откройте ее в браузере:\n"
+            f"<code>{map_url}</code>\n\n"
+            "<i>Ссылка действительна 5 минут.</i>",
+            # Явно отключаем превью, чтобы ссылка не выглядела как "сломанная"
+            disable_web_page_preview=True,
+        )
+
     await get_main_menu_message(message, session, crm_client)
