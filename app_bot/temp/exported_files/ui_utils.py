@@ -145,16 +145,22 @@ async def _enrich_deal_with_nspd_data(
     deal: Deal, nspd_client: NspdClient
 ) -> list[CadastralObject]:
     """
-    Проверяет сделку на наличие недостающих данных о КН и дозапрашивает их.
+    Проверяет сделку (в названии и описании) на наличие недостающих данных о КН
+    и дозапрашивает их.
     Возвращает ПОЛНЫЙ список кадастровых объектов (старые + новые).
     """
-    description = strip_html_and_preserve_breaks(deal.description or "")
-    if not description:
+    # Используем `or ""` на случай, если одно из полей None
+    name_text = deal.name or ""
+    description_text = strip_html_and_preserve_breaks(deal.description or "")
+    combined_text = f"{name_text}\n{description_text}"
+
+    if not combined_text.strip():
         return deal.service_data or []
 
-    # 1. Находим все кадастровые номера в описании
+    # 1. Находим все кадастровые номера в объединенном тексте
     cadastral_num_pattern = re.compile(r"\b\d{2}:\d{2}:\d{6,7}:\d{1,5}\b")
-    required_numbers = set(cadastral_num_pattern.findall(description))
+    # Используем set для автоматического удаления дубликатов
+    required_numbers = set(cadastral_num_pattern.findall(combined_text))
 
     if not required_numbers:
         return deal.service_data or []
@@ -163,10 +169,9 @@ async def _enrich_deal_with_nspd_data(
     known_objects = deal.service_data or []
     known_numbers = {obj.cadastral_number for obj in known_objects}
 
-    # 3. Определяем, что нужно запросить
+    # 3. Определяем, что нужно запросить (остальная логика не меняется)
     numbers_to_fetch = list(required_numbers - known_numbers)
 
-    # Если ничего нового запрашивать не надо, возвращаем то, что было
     if not numbers_to_fetch:
         return known_objects
 
@@ -196,7 +201,8 @@ async def get_and_format_deals_from_crm(
 ) -> list[dict]:
     """
     Универсальная функция для получения и форматирования списка сделок за период.
-    Обогащает кадастровые номера ссылками, при необходимости дозапрашивая данные.
+    Обогащает кадастровые номера в НАЗВАНИИ и ОПИСАНИИ ссылками,
+    при необходимости дозапрашивая данные.
     """
     logger.info(f"Запрос и форматирование сделок для диапазона: {start_date} - {end_date}")
 
@@ -209,7 +215,7 @@ async def get_and_format_deals_from_crm(
 
     formatted_messages = []
     for deal in deals:
-        # Получаем полный и актуальный список кадастровых объектов
+        # Получаем полный и актуальный список кадастровых объектов (из name и description)
         all_cadastral_objects = await _enrich_deal_with_nspd_data(deal, nspd_client)
 
         # Если данные были обновлены, запускаем фоновую задачу для сохранения в CRM
@@ -217,17 +223,17 @@ async def get_and_format_deals_from_crm(
             logger.info(
                 f"Данные для сделки {deal.id} были обогащены, запускаю обновление в CRM..."
             )
-            # Сериализуем данные в JSON
             json_data_to_save = json.dumps(
                 [obj.model_dump(mode="json") for obj in all_cadastral_objects],
                 ensure_ascii=False,
             )
-            # Создаем фоновую задачу, которая не будет блокировать ответ пользователю
             asyncio.create_task(
                 crm_client.update_deal(
                     deal.id, {"Category1000076CustomFieldServiceData": json_data_to_save}
                 )
             )
+            # ОБНОВЛЯЕМ ОБЪЕКТ В ПАМЯТИ
+            deal.service_data = all_cadastral_objects
 
         # 1. Подготавливаем карту координат из ПОЛНОГО списка объектов
         coord_map = {}
@@ -236,26 +242,33 @@ async def get_and_format_deals_from_crm(
                 if cad_object.cadastral_number and cad_object.centroid_wgs84:
                     coord_map[cad_object.cadastral_number] = cad_object.centroid_wgs84
 
-        # ... остальная часть функции остается почти без изменений ...
-
-        # 2. Обрабатываем описание
+        enriched_name = deal.name
         enriched_description = ""
-        if deal.description:
-            clean_description = strip_html_and_preserve_breaks(deal.description)
-            if coord_map and clean_description:
-                pattern = re.compile("|".join(re.escape(kn) for kn in coord_map.keys()))
 
-                def replacer(match):
-                    cadastral_number = match.group(0)
-                    coords = coord_map.get(cadastral_number)
-                    if coords:
-                        link = create_2gis_link(lon=coords[0], lat=coords[1])
-                        return f'<a href="{link}">{cadastral_number}</a>'
-                    return cadastral_number
+        # Создаем replacer только если есть что заменять
+        if coord_map:
+            # Компилируем паттерн для поиска всех известных нам КН
+            pattern = re.compile("|".join(re.escape(kn) for kn in coord_map.keys()))
 
+            def replacer(match):
+                cadastral_number = match.group(0)
+                coords = coord_map.get(cadastral_number)
+                if coords:
+                    link = create_2gis_link(lon=coords[0], lat=coords[1])
+                    return f'<a href="{link}">{cadastral_number}</a>'
+                return cadastral_number
+
+            # Обогащаем название
+            enriched_name = pattern.sub(replacer, deal.name)
+
+            # Обогащаем описание
+            if deal.description:
+                clean_description = strip_html_and_preserve_breaks(deal.description)
                 enriched_description = pattern.sub(replacer, clean_description)
-            else:
-                enriched_description = clean_description
+
+        # Если обогащения не было, просто очищаем описание от HTML
+        elif deal.description:
+            enriched_description = strip_html_and_preserve_breaks(deal.description)
 
         # 3. Собираем итоговое сообщение
         message_parts = []
@@ -280,7 +293,8 @@ async def get_and_format_deals_from_crm(
             visit_date_str = f"<b>{deal.visit_datetime.strftime(fmt)}</b>"
 
         message_parts.append(f"{header_link} {visit_date_str}".strip())
-        message_parts.append(f"<b>{deal.name}</b>")
+        # Используем обогащенное название
+        message_parts.append(f"<b>{enriched_name}</b>")
         if enriched_description:
             message_parts.append(enriched_description)
 

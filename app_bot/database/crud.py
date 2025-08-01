@@ -1,13 +1,14 @@
 # Файл: app_bot/database/crud.py
 
 import logging
+import uuid
 from collections.abc import Sequence
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import AppSettings, DailyLimitOverride, Permission, User
+from .models import AppSettings, DailyLimitOverride, MapRequest, Permission, User
 
 
 logger = logging.getLogger(__name__)
@@ -359,3 +360,51 @@ async def get_actual_brigades_for_date(session: AsyncSession, target_date: date)
             f"Используется кол-во бригад по умолчанию для {target_date}: {settings.default_brigades_count}"
         )
         return settings.default_brigades_count
+
+
+async def create_map_request(
+    session: AsyncSession,
+    user_telegram_id: int,
+    deals_data_json: str,
+    expires_in_minutes: int = 5,
+) -> str:
+    """
+    Создает новый запрос на карту, предварительно удаляя старые запросы этого же пользователя.
+
+    Args:
+        session: Сессия SQLAlchemy.
+        user_telegram_id: ID пользователя в Telegram.
+        deals_data_json: Сериализованные в JSON данные о сделках.
+        expires_in_minutes: Время жизни токена в минутах.
+
+    Returns:
+        Уникальный токен для доступа к карте.
+    """
+    logger.info(f"Создание запроса на карту для пользователя {user_telegram_id}.")
+
+    # 1. Удаляем все предыдущие запросы от этого пользователя
+    delete_stmt = delete(MapRequest).where(MapRequest.user_telegram_id == user_telegram_id)
+    await session.execute(delete_stmt)
+    logger.info(f"Старые запросы на карту для пользователя {user_telegram_id} удалены.")
+
+    # 2. Генерируем новый токен и время жизни
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(minutes=expires_in_minutes)
+    request_token = str(uuid.uuid4())
+
+    # 3. Создаем новый объект запроса
+    new_request = MapRequest(
+        request_token=request_token,
+        user_telegram_id=user_telegram_id,
+        deals_data_json=deals_data_json,
+        expires_at=expires_at,
+    )
+
+    # 4. Сохраняем в БД
+    session.add(new_request)
+    await session.flush()
+    logger.info(
+        f"Новый запрос на карту для пользователя {user_telegram_id} создан с токеном {request_token}."
+    )
+
+    return request_token
