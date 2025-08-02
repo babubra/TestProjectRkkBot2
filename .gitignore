@@ -68,3 +68,6 @@ Thumbs.db
 #база данных
 main.sqlite3
 your_database.db
+
+test/export_files_app_bot/
+test/export_files_map_backend/
