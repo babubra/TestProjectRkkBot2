@@ -318,7 +318,7 @@ async def prepare_deal_view_data(
         )
         token = await crud.create_map_request(session, user_telegram_id, json_string)
         frontend_base_url = get_env_settings().FRONTEND_BASE_URL
-        map_url = f"{frontend_base_url}/map/{token}"
+        map_url = f"{frontend_base_url}/?token={token}"
 
     return {"messages_to_send": messages_to_send, "map_url": map_url}
 
