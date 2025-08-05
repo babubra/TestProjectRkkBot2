@@ -44,13 +44,6 @@ services:
     depends_on:
       - backend
     restart: always
-    env_file:
-      - .env
-    volumes:
-      - db_data:/app/database
-    depends_on:
-      - backend
-    restart: always
 
 # --- Секция определения томов (хранилищ данных) ---
 volumes:
