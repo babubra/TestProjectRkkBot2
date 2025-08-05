@@ -4,10 +4,6 @@ openai
 pathspec
 protobuf
 pydantic
-<<<<<<< HEAD
 pydantic_settings
 pyproj
 SQLAlchemy
-=======
->>>>>>> ebe153d876d5655c84c30b86aa292e62f7c33ffe
-# построение зависимостей: pipreqs ./app_bot --encoding utf-8 --force --savepath ./requirements.txt
