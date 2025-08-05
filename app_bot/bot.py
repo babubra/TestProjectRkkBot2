@@ -1,3 +1,4 @@
+# app_bot\bot.py
 import asyncio
 import logging
 
