@@ -1,1 +1,0 @@
-# Файл: map_backend/models/__init__.py

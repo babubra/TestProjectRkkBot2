@@ -63,12 +63,7 @@ Thumbs.db
 
 # Log files
 *.log
-
 .env
-/map_frontend/.env.local
-.env.local
-/map_frontend/.env.development
-.env.development
 
 #база данных
 main.sqlite3

@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-# Импортируем модель из нашего бэкенда
-from map_backend.models.models import MapRequest
+# ВАЖНО: Импортируем модель напрямую из кода бота, чтобы избежать дублирования
+from app_bot.database.models import MapRequest
 
 
 logger = logging.getLogger(__name__)

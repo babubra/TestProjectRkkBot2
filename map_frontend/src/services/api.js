@@ -1,16 +1,16 @@
-// map_frontend/src/services/api.js
+import axios from 'axios'
 
-import axios from 'axios';
+// Получаем базовый URL из переменных окружения
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
-// Создаем экземпляр axios.
-// Мы НЕ указываем здесь baseURL, чтобы запросы были относительными.
-// Они будут отправляться на тот же хост, с которого загружен сайт.
+// Создаем экземпляр axios с базовыми настройками
 const apiClient = axios.create({
+  baseURL: API_BASE_URL,
   timeout: 10000, // 10 секунд таймаут
   headers: {
     'Content-Type': 'application/json',
   }
-});
+})
 
 /**
  * Получает данные о сделках по токену
@@ -19,23 +19,25 @@ const apiClient = axios.create({
  */
 export async function fetchMapData(token) {
   try {
-    // Теперь путь начинается с /api/, как и ожидает наш Nginx.
-    const response = await apiClient.get(`/api/v1/map-data/${token}`);
-    return response.data;
+    const response = await apiClient.get(`/api/v1/map-data/${token}`)
+    return response.data
   } catch (error) {
-    // Блок обработки ошибок остается без изменений. Он написан хорошо.
+    // Обрабатываем разные типы ошибок
     if (error.response) {
+      // Сервер ответил с ошибкой
       if (error.response.status === 404) {
-        throw new Error('Ссылка недействительна или устарела. Запросите новую ссылку в боте.');
+        throw new Error('Ссылка недействительна или устарела. Запросите новую ссылку в боте.')
       } else if (error.response.status === 500) {
-        throw new Error('Ошибка на сервере. Попробуйте позже.');
+        throw new Error('Ошибка на сервере. Попробуйте позже.')
       } else {
-        throw new Error(`Ошибка сервера: ${error.response.status}`);
+        throw new Error(`Ошибка сервера: ${error.response.status}`)
       }
     } else if (error.request) {
-      throw new Error('Не удалось связаться с сервером. Проверьте подключение к интернету.');
+      // Запрос был отправлен, но ответ не получен
+      throw new Error('Не удалось связаться с сервером. Проверьте подключение к интернету.')
     } else {
-      throw new Error('Произошла неизвестная ошибка.');
+      // Что-то еще пошло не так
+      throw new Error('Произошла неизвестная ошибка.')
     }
   }
 }

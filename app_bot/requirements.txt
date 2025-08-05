@@ -8,3 +8,4 @@ pydantic_settings
 pyproj
 SQLAlchemy
 aiosqlite
+# построение зависимостей: pipreqs ./app_bot --encoding utf-8 --force --savepath ./requirements.txt

@@ -3,5 +3,3 @@ uvicorn[standard]
 sqlalchemy
 aiosqlite
 pydantic-settings
-httpx
-pydantic
