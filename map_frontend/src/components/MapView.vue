@@ -113,22 +113,23 @@ function createPopupHTML(deal, cadastral) {
       padding: 15px;
       border-radius: 8px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-      max-width: 350px;
+      min-width: 380px;
+      max-width: 450px;
       font-family: Arial, sans-serif;
       border-top: 4px solid ${executorColor};
     ">
-      <h3 style="margin: 0 0 10px 0; font-size: 16px;">
+      <h3 style="margin: 0 0 10px 0; font-size: 14px; line-height: 1.3;">
         <a href="${deal.deal_url}" target="_blank" style="color: #0066cc; text-decoration: none;">
           ${deal.deal_name}
         </a>
       </h3>
-      <div style="margin: 8px 0; font-size: 14px; color: #555;">
+      <div style="margin: 8px 0; font-size: 13px; color: #555;">
         <strong>ID сделки:</strong> ${deal.deal_id}
       </div>
-      <div style="margin: 8px 0; font-size: 14px; color: #555;">
+      <div style="margin: 8px 0; font-size: 13px; color: #555;">
         <strong>Время визита:</strong> ${deal.visit_time}
       </div>
-      <div style="margin: 8px 0; font-size: 14px; color: #555;">
+      <div style="margin: 8px 0; font-size: 13px; color: #555;">
         <strong>Исполнители:</strong><br>
         <div style="
           background: ${executorColor}20;
@@ -136,13 +137,14 @@ function createPopupHTML(deal, cadastral) {
           border-radius: 4px;
           margin-top: 5px;
           border-left: 3px solid ${executorColor};
+          font-size: 12px;
         ">
           ${deal.executors.join(', ')}
         </div>
       </div>
-      <div style="margin: 8px 0; font-size: 14px; color: #555;">
+      <div style="margin: 8px 0; font-size: 13px; color: #555;">
         <strong>Кадастровый номер:</strong><br>
-        <span style="font-family: monospace; background: #f5f5f5; padding: 2px 5px; border-radius: 3px;">
+        <span style="font-family: monospace; background: #f5f5f5; padding: 2px 5px; border-radius: 3px; font-size: 12px;">
           ${cadastral}
         </span>
       </div>

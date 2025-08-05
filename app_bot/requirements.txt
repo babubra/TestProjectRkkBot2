@@ -4,4 +4,6 @@ SQLAlchemy[asyncio]>=2.0
 aiosqlite>=0.17
 aiogram
 pydantic
+pyproj
+openai
 # построение зависимостей: pipreqs ./app_bot --encoding utf-8 --force --savepath ./requirements.txt

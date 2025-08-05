@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # Телеграм бот
+  telegram-bot:
+    build:
+      context: ./app_bot
+      dockerfile: Dockerfile
+    container_name: telegram-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - db-data:/app/data
+      - ./your_database.db:/app/your_database.db
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+  # Бэкенд API
+  backend:
+    build:
+      context: ./map_backend
+      dockerfile: Dockerfile
+    container_name: map-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - db-data:/app/data
+      - ./your_database.db:/app/your_database.db
+    networks:
+      - app-network
+
+  # Фронтенд
+  frontend:
+    build:
+      context: ./map_frontend
+      dockerfile: Dockerfile
+    container_name: map-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  db-data:
+    driver: local
