@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Версия синтаксиса docker-compose
 version: '3.8'
 
@@ -14,11 +13,8 @@ services:
         - VITE_YANDEX_MAPS_API_KEY=${VITE_YANDEX_MAPS_API_KEY}
     container_name: rkk_frontend
     ports:
-      # Пробрасываем порт 8080 хоста (вашего Windows Server) на порт 80 контейнера.
-      # Вы будете заходить на фронтенд по адресу http://<IP-вашего-сервера>:8080
       - "8080:80"
     depends_on:
-      # Запускаем фронтенд только после того, как запустится бэкенд.
       - backend
     restart: always
 
@@ -29,11 +25,8 @@ services:
       dockerfile: backend.Dockerfile
     container_name: rkk_backend
     env_file:
-      # Указываем, что переменные окружения нужно взять из этого файла
       - .env
     volumes:
-      # Подключаем именованный том 'db_data' к папке /app/database в контейнере.
-      # Именно здесь будет лежать наш файл SQLite.
       - db_data:/app/database
     restart: always
 
@@ -46,18 +39,12 @@ services:
     env_file:
       - .env
     volumes:
-      # Подключаем тот же самый том 'db_data'.
-      # Таким образом бэкенд и бот будут видеть один и тот же файл базы данных.
       - db_data:/app/database
     depends_on:
-      # Бот зависит от бэкенда (хорошая практика)
       - backend
     restart: always
 
 # --- Секция определения томов (хранилищ данных) ---
 volumes:
   # Создаем именованный том для хранения нашей базы данных.
-  # Это позволяет базе данных "пережить" перезапуск или удаление контейнеров.
   db_data:
-=======
->>>>>>> ebe153d876d5655c84c30b86aa292e62f7c33ffe
