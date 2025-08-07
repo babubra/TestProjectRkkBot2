@@ -3,6 +3,7 @@
 # ==================================
 # Игнорируем главный .env файл с секретами
 .env
+.env.local
 # Игнорируем любые локальные переопределения для docker-compose
 docker-compose.override.yml
 docker-compose.local.yml
