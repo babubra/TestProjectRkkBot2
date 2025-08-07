@@ -1,73 +1,76 @@
+# ==================================
+# Файлы окружения и секреты
+# ==================================
+# Игнорируем главный .env файл с секретами
+.env
+# Игнорируем любые локальные переопределения для docker-compose
+docker-compose.override.yml
+docker-compose.local.yml
 
-# Byte-compiled / optimized / DLL files
+# ==================================
+# Зависимости и виртуальные окружения
+# ==================================
+env/
+venv/
+node_modules/
+dist/
+build/
+*.egg-info/
+
+# ==================================
+# Скомпилированные файлы и кэш Python
+# ==================================
 __pycache__/
 *.py[cod]
 *$py.class
-
-# C Extensions
 *.so
-
-# Distribution / packaging
 .Python
-env/
-venv/
-ENV/
-ENV.bak/
-venv.bak/
-*.egg-info/
-dist/
-build/
+.cache
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
+# ==================================
+# Базы данных и временные файлы
+# ==================================
+*.sqlite3
+your_database.db
+*.log
 
-# PyInstaller
-*.manifest
-*.spec
+# ==================================
+# Файлы IDE и редакторов
+# ==================================
+.idea/
+.vscode/
+*.sublime-workspace
+*.sublime-project
+.qodo/ # <-- Ваша папка
 
-# Unit test / coverage reports
+# ==================================
+# Файлы тестов и отчетов
+# ==================================
 htmlcov/
 .tox/
 .nox/
 .coverage
 .coverage.*
-.cache
 nosetests.xml
 coverage.xml
 *.cover
 *.py,cover
 .hypothesis/
-
-# Jupyter Notebook
 .ipynb_checkpoints
 
-# PyCharm
-.idea/
-
-# VSCode
-.vscode/
-
-# Sublime
-*.sublime-workspace
-*.sublime-project
-
-# MyPy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Service folders
-.qodo/
-
-# System files
+# ==================================
+# Системные файлы
+# ==================================
 .DS_Store
 Thumbs.db
 
-# Log files
-*.log
-.env
-
-#база данных
-main.sqlite3
-your_database.db
-
+# ==================================
+# Специфичные для проекта исключения
+# ==================================
+# Папки с экспортированными файлами
 test/export_files_app_bot/
 test/export_files_map_backend/
+/app_bot/temp/exported_files/

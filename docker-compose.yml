@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  # Backend API
+  map-backend:
+    build:
+      context: .
+      dockerfile: .docker/python/Dockerfile
+    container_name: rkk-map-backend
+    env_file: .env # <-- Указываем использовать наш главный .env файл
+    environment:
+      # Переопределяем путь к БД для работы внутри контейнера
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/your_database.db
+    volumes:
+      - data:/app/data # <-- Изменили volume на именованный
+    restart: unless-stopped
+    networks:
+      - rkk-network
+
+  # Telegram Bot
+  bot:
+    build:
+      context: .
+      dockerfile: .docker/python/Dockerfile
+    container_name: rkk-bot
+    command: ["python", "-m", "app_bot.bot"]
+    env_file: .env # <-- Указываем использовать наш главный .env файл
+    environment:
+      # Переопределяем путь к БД для работы внутри контейнера
+      - DATABASE_URL=sqlite+aiosqlite:////app/data/your_database.db
+    volumes:
+      - data:/app/data # <-- Изменили volume на именованный
+    restart: unless-stopped
+    depends_on:
+      - map-backend
+    networks:
+      - rkk-network
+
+  # Frontend
+  map-frontend:
+    build:
+      context: .
+      dockerfile: .docker/frontend/Dockerfile
+      args:
+        # Передаем переменные из .env файла при сборке
+        VITE_YANDEX_MAPS_API_KEY: ${VITE_YANDEX_MAPS_API_KEY}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+    container_name: rkk-map-frontend
+    ports:
+      - "80:80"
+      - "443:443" # <-- Добавим порт для HTTPS, если будете настраивать
+    restart: unless-stopped
+    depends_on:
+      - map-backend
+    networks:
+      - rkk-network
+    # extra_hosts больше не нужен, т.к. мы используем относительный путь для API
+
+networks:
+  rkk-network:
+    driver: bridge
+
+volumes:
+  data:

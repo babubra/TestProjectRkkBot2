@@ -1,3 +1,4 @@
+#app_bot\requirements.txt
 aiogram
 httpx
 openai

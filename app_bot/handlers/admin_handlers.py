@@ -342,7 +342,7 @@ async def process_and_save_user_data_cmd(
     except IntegrityError:
         await message.answer(
             "❌ <b>Ошибка: пользователь уже существует!</b>\n\n"
-            "Пользователь с таким <b>Telegram ID</b> или <b>Megaplan ID</b> "
+            "Пользователь с таким <b>Telegram ID</b> "
             "уже зарегистрирован в системе."
         )
     except Exception as e:
@@ -927,7 +927,7 @@ async def process_new_default_brigades_count(
         await message.answer(
             f"✅ Количество бригад по умолчанию успешно изменено на <b>{new_count}</b>."
         )
-    except Exception as e:
+    except Exception:
         # ... (обработка ошибок) ...
         return
     finally:

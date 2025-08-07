@@ -47,7 +47,7 @@ class User(Base):
     telegram_id: Mapped[int] = mapped_column(
         BigInteger, unique=True, index=True, nullable=False
     )
-    megaplan_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=True)
+    megaplan_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, unique=False)
 
     permissions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
 

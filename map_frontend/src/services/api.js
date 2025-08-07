@@ -1,7 +1,10 @@
 import axios from 'axios'
 
-// Получаем базовый URL из переменных окружения
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+// В production используем относительный путь (через nginx proxy)
+// В development используем VITE_API_BASE_URL из .env
+const API_BASE_URL = import.meta.env.PROD 
+  ? ''  // Production: используем относительные пути (будет проксироваться через nginx)
+  : (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000')
 
 // Создаем экземпляр axios с базовыми настройками
 const apiClient = axios.create({
