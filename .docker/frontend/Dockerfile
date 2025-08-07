@@ -30,7 +30,7 @@ FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # Копируем конфигурацию nginx из нового расположения
-COPY .docker/nginx/nginx.conf /etc/nginx/conf.d/default.conf # <--- ИЗМЕНЕНО
+COPY .docker/nginx/nginx.conf /etc/nginx/conf.d/default.conf
 
 # Открываем порт 80
 EXPOSE 80
