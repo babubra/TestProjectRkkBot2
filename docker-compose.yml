@@ -7,12 +7,11 @@ services:
       context: .
       dockerfile: .docker/python/Dockerfile
     container_name: rkk-map-backend
-    env_file: .env # <-- Указываем использовать наш главный .env файл
+    env_file: .env
     environment:
-      # Переопределяем путь к БД для работы внутри контейнера
       - DATABASE_URL=sqlite+aiosqlite:////app/data/your_database.db
     volumes:
-      - data:/app/data # <-- Изменили volume на именованный
+      - data:/app/data
     restart: unless-stopped
     networks:
       - rkk-network
@@ -24,37 +23,52 @@ services:
       dockerfile: .docker/python/Dockerfile
     container_name: rkk-bot
     command: ["python", "-m", "app_bot.bot"]
-    env_file: .env # <-- Указываем использовать наш главный .env файл
+    env_file: .env
     environment:
-      # Переопределяем путь к БД для работы внутри контейнера
       - DATABASE_URL=sqlite+aiosqlite:////app/data/your_database.db
     volumes:
-      - data:/app/data # <-- Изменили volume на именованный
+      - data:/app/data
     restart: unless-stopped
     depends_on:
       - map-backend
     networks:
       - rkk-network
 
-  # Frontend
-  map-frontend:
+  # Мы переименовали map-frontend в nginx для ясности, так как он выполняет роль Nginx
+  nginx:
     build:
       context: .
-      dockerfile: .docker/frontend/Dockerfile
+      dockerfile: .docker/frontend/Dockerfile # Этот Dockerfile должен устанавливать Nginx и копировать статику Vue
       args:
-        # Передаем переменные из .env файла при сборке
         VITE_YANDEX_MAPS_API_KEY: ${VITE_YANDEX_MAPS_API_KEY}
         VITE_API_BASE_URL: ${VITE_API_BASE_URL}
-    container_name: rkk-map-frontend
+    container_name: rkk-nginx # Изменили имя контейнера для ясности
     ports:
       - "80:80"
-      - "443:443" # <-- Добавим порт для HTTPS, если будете настраивать
+      - "443:443"
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+      - ./.docker/nginx/nginx.conf:/etc/nginx/conf.d/default.conf
     restart: unless-stopped
     depends_on:
       - map-backend
     networks:
       - rkk-network
-    # extra_hosts больше не нужен, т.к. мы используем относительный путь для API
+    # УБРАЛИ СЛОЖНУЮ КОМАНДУ. Nginx просто запускается.
+
+  # Certbot для автоматического обновления сертификатов
+  certbot:
+    image: certbot/certbot
+    container_name: rkk-certbot
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    # ИЗМЕНЕННАЯ КОМАНДА: проверяет обновление и перезагружает Nginx при успехе
+    command: renew --quiet --post-hook "nginx -s reload"
+    restart: unless-stopped
+    depends_on:
+      - nginx # Явно указываем зависимость
 
 networks:
   rkk-network:

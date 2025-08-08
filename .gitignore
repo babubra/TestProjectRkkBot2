@@ -75,3 +75,6 @@ Thumbs.db
 test/export_files_app_bot/
 test/export_files_map_backend/
 /app_bot/temp/exported_files/
+
+# SSL сертификаты
+certbot/
