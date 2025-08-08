@@ -2,9 +2,10 @@ import axios from 'axios'
 
 // В production используем относительный путь (через nginx proxy)
 // В development используем VITE_API_BASE_URL из .env
-const API_BASE_URL = import.meta.env.PROD 
-  ? ''  // Production: используем относительные пути (будет проксироваться через nginx)
-  : (import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000')
+// В режиме разработки VITE_API_BASE_URL будет пустой строкой (из .env.local), 
+// что заставит axios использовать относительные пути. Это нужно для работы прокси Vite.
+// В режиме продакшена переменная будет не определена, и || '' также вернет пустую строку.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
 // Создаем экземпляр axios с базовыми настройками
 const apiClient = axios.create({

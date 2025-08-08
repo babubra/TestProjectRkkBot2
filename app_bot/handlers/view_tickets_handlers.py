@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app_bot.config.config import get_env_settings
 from app_bot.crm_service.crm_client import CRMClient
+from app_bot.keyboards.view_ticket_keyboards import get_map_url_kb
 from app_bot.nspd_service.nspd_client import NspdClient
 from app_bot.utils.ui_utils import (
     get_main_menu_message,
@@ -58,14 +59,7 @@ async def view_today_deals_handler(
 
     map_url = result.get("map_url")
     if map_url:
-        await query.message.answer(
-            "🗺️ <b>Карта выездов готова!</b>\n\n"
-            "Скопируйте ссылку ниже и откройте ее в браузере:\n"
-            f"<code>{map_url}</code>\n\n"
-            "<i>Ссылка действительна 5 минут.</i>",
-            # Явно отключаем превью, чтобы ссылка не выглядела как "сломанная"
-            disable_web_page_preview=True,
-        )
+        await send_map_url_message(query.message, map_url)
 
     await get_main_menu_message(query.message, session, crm_client)
 
@@ -99,14 +93,7 @@ async def view_tomorrow_deals_handler(
 
     map_url = result.get("map_url")
     if map_url:
-        await query.message.answer(
-            "🗺️ <b>Карта выездов готова!</b>\n\n"
-            "Скопируйте ссылку ниже и откройте ее в браузере:\n"
-            f"<code>{map_url}</code>\n\n"
-            "<i>Ссылка действительна 5 минут.</i>",
-            # Явно отключаем превью, чтобы ссылка не выглядела как "сломанная"
-            disable_web_page_preview=True,
-        )
+        await send_map_url_message(query.message, map_url)
 
     await get_main_menu_message(query.message, session, crm_client)
 
@@ -163,13 +150,35 @@ async def process_date_for_view(
 
     map_url = result.get("map_url")
     if map_url:
-        await message.answer(
-            "🗺️ <b>Карта выездов готова!</b>\n\n"
-            "Скопируйте ссылку ниже и откройте ее в браузере:\n"
-            f"<code>{map_url}</code>\n\n"
-            "<i>Ссылка действительна 5 минут.</i>",
-            # Явно отключаем превью, чтобы ссылка не выглядела как "сломанная"
-            disable_web_page_preview=True,
-        )
+        await send_map_url_message(message, map_url)
 
     await get_main_menu_message(message, session, crm_client)
+
+
+async def send_map_url_message(message: Message, map_url: str):
+    """
+    Отправляет пользователю сообщение со ссылкой на карту.
+    Формат сообщения зависит от того, является ли ссылка "боевой" (HTTPS)
+    или "отладочной" (HTTP).
+    """
+    text = "🗺️ <b>Карта выездов ��отова!</b>\n\n"
+    reply_markup = None
+    disable_web_page_preview = True
+
+    # Если ссылка "боевая" (начинается с https), то создаем кнопку
+    if map_url.startswith("https://"):
+        text += "Нажмите на кнопку ниже, чтобы открыть карту в браузере:"
+        reply_markup = get_map_url_kb(map_url)
+    # Если ссылка "отладочная" (localhost), то просто показываем ее для копирования
+    else:
+        text += (
+            "Скопируйте ссылку ниже и откройте ее в браузере:\n"
+            f"<code>{map_url}</code>\n\n"
+            "<i>Ссылка действительна 5 минут.</i>"
+        )
+
+    await message.answer(
+        text=text,
+        reply_markup=reply_markup,
+        disable_web_page_preview=disable_web_page_preview,
+    )

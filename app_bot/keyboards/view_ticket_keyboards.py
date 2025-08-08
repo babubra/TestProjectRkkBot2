@@ -26,3 +26,12 @@ def get_deal_action_kb(deal_id: str | int) -> InlineKeyboardMarkup:
     )
 
     return builder.as_markup()
+
+
+def get_map_url_kb(map_url: str) -> InlineKeyboardMarkup:
+    """
+    Создает инлайн-клавиатуру с кнопкой для перехода по URL карты.
+    """
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Открыть карту 🗺️", url=map_url)
+    return builder.as_markup()
