@@ -283,10 +283,24 @@ async def prepare_deal_view_data(
             else ""
         )
 
+        # --- Генерация ссылок на файлы для выезда ---
+        files_links_text = ""
+        if deal.files_for_visit:
+            file_links = []
+            for file_info in deal.files_for_visit:
+                if file_info.path:
+                    full_url = urljoin(crm_client.base_url, file_info.path)
+                    file_name = file_info.name or "Файл"
+                    file_links.append(f'<a href="{full_url}">{file_name}</a>')
+            
+            if file_links:
+                files_links_text = f"📎 <b>Файлы для выезда:</b> {', '.join(file_links)}"
+
         message_parts = [
             f"{header_link} {visit_date_str}".strip(),
             f"<b>{enriched_name}</b>",
             enriched_description,
+            files_links_text,
             f"<b>Исполнители:</b> {', '.join([e.name for e in deal.executors])}"
             if deal.executors
             else "",
