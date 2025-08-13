@@ -40,59 +40,62 @@ async def get_main_menu_message(
         "Выберите необходимое действие:"
     )
 
-    # Получаем сегодняшнюю и завтрашнюю дату строго в нашем часовом поясе
+    # Получаем список дат: сегодня, завтра и еще 5 следующих дней
     now_local = datetime.now(APP_TIMEZONE)
     today = now_local.date()
-    tomorrow = today + timedelta(days=1)
+    all_days = [today + timedelta(days=i) for i in range(7)]
+    tomorrow = all_days[1]
 
-    limit_today = 0
-    limit_tomorrow = 0
-    count_today = 0
-    count_tomorrow = 0
+    # Заготовки для счетчиков и лимитов
+    counts_by_day: dict[date, int] = dict.fromkeys(all_days, 0)
+    limits_by_day: dict[date, int] = dict.fromkeys(all_days, 0)
 
     try:
-        limit_today = await crud.get_actual_limit_for_date(session, today)
-        limit_tomorrow = await crud.get_actual_limit_for_date(session, tomorrow)
+        # Лимиты по всем 7 дням
+        for d in all_days:
+            try:
+                limits_by_day[d] = await crud.get_actual_limit_for_date(session, d)
+            except Exception as le:
+                logger.error(f"Ошибка при запросе лимита на {d}: {le}")
+                limits_by_day[d] = 0
 
+        # Считаем сделки за диапазон из 7 дней
         deals_for_period = await crm_client.get_deals_for_date_range_model(
-            start_date=today, end_date=tomorrow
+            start_date=today, end_date=all_days[-1]
         )
-
-        deals_today = []
-        deals_tomorrow = []
-
         if deals_for_period:
-            deals_today = [
-                deal
-                for deal in deals_for_period
-                if deal.visit_datetime and deal.visit_datetime.date() == today
-            ]
-            deals_tomorrow = [
-                deal
-                for deal in deals_for_period
-                if deal.visit_datetime and deal.visit_datetime.date() == tomorrow
-            ]
+            for deal in deals_for_period:
+                if deal.visit_datetime:
+                    vd = deal.visit_datetime.date()
+                    if vd in counts_by_day:
+                        counts_by_day[vd] += 1
 
-        count_today = len(deals_today)
-        count_tomorrow = len(deals_tomorrow)
+        count_today = counts_by_day[today]
+        count_tomorrow = counts_by_day[tomorrow]
 
     except Exception as e:
         logger.error(
             f"Ошибка при получении данных для главного меню (user: {message.from_user.id}): {e}",
             exc_info=True,
         )
-        # Редактируем сообщение о загрузке, показывая ошибку
         await loading_message.edit_text(
-            "❗️ Произошла ошибка при загрузке данных о заявках. "
-            "Некоторые функции могут быть недоступны."
+            "❗️ Произошла ошибка при загрузке данных о заявках. Некоторые функции могут быть не��оступны."
         )
         return
 
+    # Подготовим список для следующих 5 дней (после завтра)
+    next_days = [
+        (d, counts_by_day[d], limits_by_day[d]) for d in all_days[2:]
+    ]
+
     kb = get_main_menu_kb(
         tickets_today_count=count_today,
-        limit_today=limit_today,
+        limit_today=limits_by_day[today],
         tickets_tomorrow_count=count_tomorrow,
-        limit_tomorrow=limit_tomorrow,
+        limit_tomorrow=limits_by_day[tomorrow],
+        next_days=next_days,
+        today_date=today,
+        tomorrow_date=tomorrow,
     )
 
     # Редактируем сообщение о загрузке, заменяя его на главное меню

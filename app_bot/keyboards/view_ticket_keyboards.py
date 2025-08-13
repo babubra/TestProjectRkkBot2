@@ -14,9 +14,18 @@ class DealActionCallback(CallbackData, prefix="deal"):
     deal_id: str
 
 
+class ViewDateCallback(CallbackData, prefix="view_date"):
+    """
+    Фабрика Callback-данных для просмотра заявок на определенную дату.
+    - date: строка даты в формате ISO (YYYY-MM-DD)
+    """
+
+    date: str
+
+
 def get_deal_action_kb(deal_id: str | int) -> InlineKeyboardMarkup:
     """
-    Создает инлайн-клавиатуру с действиями для конкретной сделки.
+    Создает ��нлайн-клавиатуру с действиями для конкретной сделки.
     """
     builder = InlineKeyboardBuilder()
 

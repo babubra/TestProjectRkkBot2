@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
+from app_bot.keyboards.view_ticket_keyboards import ViewDateCallback
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
@@ -30,21 +31,32 @@ class ViewTicketsByDateFSM(StatesGroup):
     waiting_for_date = State()
 
 
-@view_tickets_router.callback_query(F.data == "view_tickets_today")
-async def view_today_deals_handler(
+@view_tickets_router.callback_query(ViewDateCallback.filter())
+async def view_deals_by_selected_date_handler(
     query: CallbackQuery,
+    callback_data: ViewDateCallback,
     crm_client: CRMClient,
     session: AsyncSession,
     nspd_client: NspdClient,
 ):
-    await query.message.answer("Загружаю заявки на сегодня...")
     await query.answer()
+
+    target_date = datetime.fromisoformat(callback_data.date).date()
 
     today = datetime.now(APP_TIMEZONE).date()
+    if target_date == today:
+        loading_text = "Загружаю заявки на сегодня..."
+    elif target_date == today + timedelta(days=1):
+        loading_text = "Загружаю заявки на завтра..."
+    else:
+        loading_text = f"Загружаю заявки на {target_date.strftime('%d.%m.%Y')}..."
+
+    await query.message.answer(loading_text)
+
     result = await prepare_deal_view_data(
         crm_client=crm_client,
-        start_date=today,
-        end_date=today,
+        start_date=target_date,
+        end_date=target_date,
         nspd_client=nspd_client,
         session=session,
         user_telegram_id=query.from_user.id,
@@ -64,38 +76,6 @@ async def view_today_deals_handler(
     await get_main_menu_message(query.message, session, crm_client)
 
 
-@view_tickets_router.callback_query(F.data == "view_tickets_tomorrow")
-async def view_tomorrow_deals_handler(
-    query: CallbackQuery,
-    crm_client: CRMClient,
-    session: AsyncSession,
-    nspd_client: NspdClient,
-):
-    await query.message.answer("Загружаю заявки на завтра...")
-    await query.answer()
-
-    tomorrow = datetime.now(APP_TIMEZONE).date() + timedelta(days=1)
-    result = await prepare_deal_view_data(
-        crm_client=crm_client,
-        start_date=tomorrow,
-        end_date=tomorrow,
-        nspd_client=nspd_client,
-        session=session,
-        user_telegram_id=query.from_user.id,
-    )
-
-    for item in result["messages_to_send"]:
-        await query.message.answer(
-            text=item["text"],
-            reply_markup=item["reply_markup"],
-            disable_web_page_preview=True,
-        )
-
-    map_url = result.get("map_url")
-    if map_url:
-        await send_map_url_message(query.message, map_url)
-
-    await get_main_menu_message(query.message, session, crm_client)
 
 
 @view_tickets_router.callback_query(F.data == "view_tickets_other_date")
