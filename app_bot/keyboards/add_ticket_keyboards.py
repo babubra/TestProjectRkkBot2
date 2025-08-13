@@ -10,6 +10,7 @@ class AddTicketDateCallback(CallbackData, prefix="add_ticket_date"):
     """
     Фабрика Callback-данных для выбора даты при создании заявки.
     - action: 'select_date' - действие выбора даты.
+    - action: 'custom_date' - действие для ввода произвольной даты.
     - date_iso: Выбранная дата в формате ISO (ГГГГ-ММ-ДД).
     """
 
@@ -80,6 +81,14 @@ def get_add_ticket_date_kb(
                 action="select_date", date_iso=current_date.isoformat()
             ).pack(),
         )
+
+    # Добавляем кнопку для ввода произвольной даты
+    builder.button(
+        text="📅 Ввести свою дату",
+        callback_data=AddTicketDateCallback(
+            action="custom_date", date_iso=""  # Пустая строка, так как дата будет введена позже
+        ).pack(),
+    )
 
     builder.button(text="❌ Отмена", callback_data="add_ticket_cancel")
 

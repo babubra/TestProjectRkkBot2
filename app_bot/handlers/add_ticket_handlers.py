@@ -37,6 +37,7 @@ class AddTicketFSM(StatesGroup):
     """FSM для процесса создания заявки."""
 
     waiting_for_visit_date = State()
+    waiting_for_custom_date_input = State()  # Новое состояние для ввода произвольной даты
     waiting_for_visit_time = State()
     waiting_for_description = State()
     waiting_for_files = State()
@@ -97,6 +98,35 @@ async def start_add_ticket(
             "❌ Произошла ошибка при загрузке данных. Попробуйте позже."
         )
         await state.clear()
+
+
+@add_ticket_router.callback_query(
+    AddTicketFSM.waiting_for_visit_date,
+    AddTicketDateCallback.filter(F.action == "custom_date"),
+    HasPermissionFilter(Permission.CREATE_TICKETS),
+)
+async def process_custom_date_request(
+    query: CallbackQuery,
+    state: FSMContext,
+):
+    """
+    Обрабатывает нажатие кнопки "Ввести свою дату".
+    Переводит пользователя в состояние ожидания ввода произвольной даты.
+    """
+    await query.answer()
+    
+    await query.message.edit_text(
+        "📅 <b>Ввод произвольной даты</b>\n\n"
+        "Введите дату выезда в од��ом из форматов:\n"
+        "• <code>ДД.ММ.ГГГГ</code> (например: 25.12.2024)\n"
+        "• <code>ДД.ММ</code> (например: 25.12 - текущий год)\n"
+        "• <code>ДД</code> (например: 25 - текущий месяц и год)\n\n"
+        "⚠️ Дата не может быть в прошлом.",
+        reply_markup=get_add_ticket_cancel_kb(),
+        parse_mode="HTML",
+    )
+    
+    await state.set_state(AddTicketFSM.waiting_for_custom_date_input)
 
 
 @add_ticket_router.callback_query(
@@ -242,6 +272,149 @@ async def process_visit_time(
     )
 
     await state.set_state(AddTicketFSM.waiting_for_description)
+
+
+@add_ticket_router.message(
+    AddTicketFSM.waiting_for_custom_date_input,
+    F.text,
+    HasPermissionFilter(Permission.CREATE_TICKETS),
+)
+async def process_custom_date_input(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    crm_client: CRMClient,
+):
+    """
+    Обрабатывает ввод произвольной даты пользователем.
+    Парсит дату в различных форматах, проверяет корректность,
+    запрашивает данные из CRM и проверяет лимиты.
+    """
+    user_input = message.text.strip()
+    
+    # Функция для парсинга даты в различных форматах
+    def parse_custom_date(date_str: str) -> date | None:
+        """
+        Парсит дату в форматах: ДД.ММ.ГГГГ, ДД.ММ, ДД
+        Возвращает объект date или None при ошибке.
+        """
+        today = date.today()
+        
+        try:
+            # Убираем лишние пробелы и разделяем по точке
+            parts = [part.strip() for part in date_str.split('.')]
+            
+            if len(parts) == 3:  # ДД.ММ.ГГГГ
+                day, month, year = map(int, parts)
+                return date(year, month, day)
+            elif len(parts) == 2:  # ДД.ММ (текущий год)
+                day, month = map(int, parts)
+                return date(today.year, month, day)
+            elif len(parts) == 1:  # ДД (текущий месяц и год)
+                day = int(parts[0])
+                return date(today.year, today.month, day)
+            else:
+                return None
+        except (ValueError, TypeError):
+            return None
+    
+    # Парсим введенную дату
+    parsed_date = parse_custom_date(user_input)
+    
+    if parsed_date is None:
+        # Дата некорректна - просим ввести ��щё раз
+        await message.answer(
+            "❌ <b>Некорректная дата!</b>\n\n"
+            "Пожалуйста, введите дату в одном из форматов:\n"
+            "• <code>ДД.ММ.ГГГГ</code> (например: 25.12.2024)\n"
+            "• <code>ДД.ММ</code> (например: 25.12)\n"
+            "• <code>ДД</code> (например: 25)\n\n"
+            "Попробуйте ещё раз:",
+            reply_markup=get_add_ticket_cancel_kb(),
+            parse_mode="HTML",
+        )
+        return
+    
+    # Проверяем, что дата не в прошлом
+    today = date.today()
+    if parsed_date < today:
+        await message.answer(
+            f"❌ <b>Дата не может быть в прошлом!</b>\n\n"
+            f"Вы ввели: <b>{parsed_date.strftime('%d.%m.%Y')}</b>\n"
+            f"Сегодня: <b>{today.strftime('%d.%m.%Y')}</b>\n\n"
+            "Введите дату не раньше сегодняшнего дня:",
+            reply_markup=get_add_ticket_cancel_kb(),
+            parse_mode="HTML",
+        )
+        return
+    
+    # Дата корректна - показываем загрузку и запрашиваем данные из CRM
+    loading_msg = await message.answer("⏳ Проверяю загруженность на выбранную дату...")
+    
+    try:
+        # Запрашиваем данные из CRM для введенной даты
+        # Запрашиваем только один день, так как нам нужна информация именно по этой дате
+        deals_for_date = await crm_client.get_deals_for_date_range_model(
+            start_date=parsed_date, end_date=parsed_date
+        )
+        if deals_for_date is None:
+            deals_for_date = []
+        
+        # Получаем лимит для этой даты
+        limit = await crud.get_actual_limit_for_date(session, parsed_date)
+        count = len(deals_for_date)
+        
+        # Проверяем лимит и выводим предупреждение если нужно
+        warning_message = ""
+        if count >= limit:
+            warning_message = (
+                f"\n\n🔴 <b>Внимание!</b> Лимит на {parsed_date.strftime('%d.%m.%Y')} "
+                f"уже достигнут: <b>{count}/{limit}</b> заявок.\n"
+                "Ваша заявка будет создана, но потребуется согласование с менеджером. "
+                "Введенная дата может быть перенесена менеджером."
+            )
+        
+        # Сохраняем дату в state и переходим к выбору времени
+        await state.update_data(visit_date=parsed_date.isoformat())
+        
+        # Получаем количество бригад для расчета занятости времени
+        brigades_count = await crud.get_actual_brigades_for_date(session, parsed_date)
+        
+        # Извлекаем занятые временные слоты
+        occupied_slots = []
+        if deals_for_date:
+            # Сериализуем сделки для сохранения в state (как в оригинальном коде)
+            deals_as_dicts = [deal.model_dump(mode="json") for deal in deals_for_date]
+            await state.update_data(deals_on_period=deals_as_dicts)
+            
+            occupied_slots = [
+                datetime.fromisoformat(deal_dict["visit_datetime"]).strftime("%H:%M")
+                for deal_dict in deals_as_dicts
+                if deal_dict.get("visit_datetime")
+            ]
+        else:
+            # Если нет сделок, сохраняем пустой список
+            await state.update_data(deals_on_period=[])
+        
+        # Создаем клавиатуру для выбора времени
+        kb = get_add_ticket_time_kb(occupied_slots=occupied_slots, brigades_count=brigades_count)
+        
+        await loading_msg.edit_text(
+            f"📅 Дата выезда: <b>{parsed_date.strftime('%d.%m.%Y')}</b> "
+            f"({count}/{limit} заявок){warning_message}\n\n"
+            "🕒 Теперь выберите время выезда:",
+            reply_markup=kb,
+            parse_mode="HTML",
+        )
+        
+        await state.set_state(AddTicketFSM.waiting_for_visit_time)
+        
+    except Exception as e:
+        logger.error(f"Ошибка при обработке произвольной даты {parsed_date}: {e}", exc_info=True)
+        await loading_msg.edit_text(
+            "❌ Произошла ошибка при проверке даты. Попробуйте ещё раз или выберите другую дату:",
+            reply_markup=get_add_ticket_cancel_kb(),
+        )
 
 
 @add_ticket_router.callback_query(
