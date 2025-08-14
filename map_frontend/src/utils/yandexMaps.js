@@ -1,3 +1,5 @@
+// map_frontend\src\utils\yandexMaps.js
+
 // Получаем API ключ из переменных окружения
 const API_KEY = import.meta.env.VITE_YANDEX_MAPS_API_KEY
 
@@ -33,10 +35,16 @@ export function loadYandexMaps() {
     script.onload = async () => {
       try {
         // Ждем инициализации ymaps3
-        await ymaps3.ready
+        await ymaps3.ready;
+        
+        // Регистрируем CDN для дополнительных пакетов
+        ymaps3.import.registerCdn('https://cdn.jsdelivr.net/npm/{package}', [
+          '@yandex/ymaps3-clusterer@0.0'
+        ]);
+
         isLoaded = true
         isLoading = false
-        console.log('Яндекс.Карты 3.0 загружены успешно')
+        console.log('Яндекс.Карты 3.0 и пакет кластеризации загружены успешно')
         resolve(window.ymaps3)
       } catch (error) {
         isLoading = false
