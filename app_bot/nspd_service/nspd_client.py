@@ -10,6 +10,7 @@ from urllib.parse import urlencode
 import httpx
 from pyproj import CRS, Transformer
 
+from app_bot.config.config import get_env_settings
 from app_bot.nspd_service.schemas import CadastralObject
 
 
@@ -52,6 +53,17 @@ class NspdClient:
         """
         self.base_url = "https://nspd.gov.ru"
         self._transformer = Transformer.from_crs(CRS_WEB_MERCATOR, CRS_WGS84, always_xy=True)
+
+        # Получаем настройки из конфигурации
+        settings = get_env_settings()
+
+        # Настройка прокси
+        proxy = None
+        if settings.NSPD_PROXY:
+            # Формат: user:password@host:port
+            proxy = f"http://{settings.NSPD_PROXY}"
+            logger.info(f"NSPD_CLIENT: Используется прокси для запросов к {self.base_url}")
+
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
             headers={
@@ -61,6 +73,7 @@ class NspdClient:
             },
             timeout=timeout,
             verify=False,
+            proxy=proxy,
         )
 
         # --- ПОЛЯ ДЛЯ CIRCUIT BREAKER ---

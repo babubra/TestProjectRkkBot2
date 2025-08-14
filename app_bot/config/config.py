@@ -19,6 +19,9 @@ class EnvSettings(BaseSettings):
     APP_TIMEZONE_OFFSET: int
     PERPLEXITY_API_KEY: str
     FRONTEND_BASE_URL: str
+    
+    # Настройки прокси для NSPD в формате user:password@host:port
+    NSPD_PROXY: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"),
