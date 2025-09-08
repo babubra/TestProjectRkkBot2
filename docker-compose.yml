@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # Backend API
+  # ... сервисы map-backend и bot остаются без изменений ...
   map-backend:
     build:
       context: .
@@ -16,7 +16,6 @@ services:
     networks:
       - rkk-network
 
-  # Telegram Bot
   bot:
     build:
       context: .
@@ -34,15 +33,14 @@ services:
     networks:
       - rkk-network
 
-  # Мы переименовали map-frontend в nginx для ясности, так как он выполняет роль Nginx
   nginx:
     build:
       context: .
-      dockerfile: .docker/frontend/Dockerfile # Этот Dockerfile должен устанавливать Nginx и копировать статику Vue
+      dockerfile: .docker/frontend/Dockerfile
       args:
         VITE_YANDEX_MAPS_API_KEY: ${VITE_YANDEX_MAPS_API_KEY}
         VITE_API_BASE_URL: ${VITE_API_BASE_URL}
-    container_name: rkk-nginx # Изменили имя контейнера для ясности
+    container_name: rkk-nginx
     ports:
       - "80:80"
       - "443:443"
@@ -55,20 +53,23 @@ services:
       - map-backend
     networks:
       - rkk-network
-    # УБРАЛИ СЛОЖНУЮ КОМАНДУ. Nginx просто запускается.
+    command: sh -c "nginx -g 'daemon off;' & while true; do sleep 1d; nginx -s reload; done"
 
-  # Certbot для автоматического обновления сертификатов
   certbot:
     image: certbot/certbot
     container_name: rkk-certbot
     volumes:
       - ./certbot/conf:/etc/letsencrypt
       - ./certbot/www:/var/www/certbot
-    # ИЗМЕНЕННАЯ КОМАНДА: проверяет обновление и перезагружает Nginx при успехе
-    command: renew --quiet --post-hook "nginx -s reload"
+    # ---- НАСТОЯЩЕЕ ИСПРАВЛЕНИЕ ----
+    # 1. Переопределяем точку входа, чтобы запускать оболочку sh
+    entrypoint: /bin/sh
+    # 2. Передаем наш скрипт как команду для этой оболочки
+    command: -c "trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;"
+    # -------------------------------
     restart: unless-stopped
     depends_on:
-      - nginx # Явно указываем зависимость
+      - nginx
 
 networks:
   rkk-network:
