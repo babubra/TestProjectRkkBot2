@@ -39,7 +39,7 @@ async def start_add_files(
     """Начинает процесс добавления файлов к сделке."""
     deal_id = callback_data.deal_id
     await state.set_state(AddFilesFSM.waiting_for_files)
-    await state.update_data(deal_id=deal_id, uploaded_file_ids=[])
+    await state.update_data(deal_id=deal_id, uploaded_file_ids=[], pending_caption=None, name_counts={}, album_captions={})
 
     # Берем контекст из исходного сообщения
     message_lines = query.message.html_text.split("\n")
@@ -80,6 +80,61 @@ async def process_file(message: Message, state: FSMContext, bot: Bot, crm_client
         file_id = message.video.file_id
         file_size = message.video.file_size
         file_name = message.video.file_name or f"{file_id}.mp4"
+
+    # Выбор подписи для именования файла: приоритет
+    # 1) caption у самого сообщения
+    # 2) caption, сохранённый для альбома (media_group)
+    # 3) отложенный текстовый caption (только для следующего файла, потом очищаем)
+    data_tmp = await state.get_data()
+    caption_source = None
+    caption = None
+    mg_id = getattr(message, "media_group_id", None)
+
+    if message.caption:
+        caption = message.caption
+        caption_source = "message"
+        # Если это альбом, запомним caption для остальных элементов альбома
+        if mg_id:
+            album_captions = data_tmp.get("album_captions", {})
+            if mg_id not in album_captions:
+                album_captions[mg_id] = caption
+                await state.update_data(album_captions=album_captions)
+    else:
+        if mg_id:
+            album_captions = data_tmp.get("album_captions", {})
+            if mg_id in album_captions:
+                caption = album_captions[mg_id]
+                caption_source = "album"
+        if not caption:
+            pending = data_tmp.get("pending_caption")
+            if pending:
+                caption = pending
+                caption_source = "pending"
+
+    if caption:
+        base = "_".join(caption.split())
+        if message.photo:
+            ext = ".jpg"
+        elif message.document:
+            orig = message.document.file_name or ""
+            ext = orig[orig.rfind("."):] if "." in orig else ""
+        elif message.video:
+            orig = message.video.file_name or ""
+            ext = orig[orig.rfind("."):] if orig and "." in orig else ".mp4"
+        else:
+            ext = ""
+        # Обеспечиваем уникальность имени в рамках текущей сессии
+        data_counts = await state.get_data()
+        name_counts = data_counts.get("name_counts", {})
+        key = f"{base}{ext}".lower()
+        count = name_counts.get(key, 0) + 1
+        name_counts[key] = count
+        await state.update_data(name_counts=name_counts)
+        file_name = f"{base}_{count}{ext}" if count > 1 else f"{base}{ext}"
+
+        # Если caption пришёл отдельным текстовым сообщением — применяем только к одному следующему файлу
+        if caption_source == "pending":
+            await state.update_data(pending_caption=None)
 
     if not file_id:
         await message.answer("Не удалось получить информацию о файле.")
@@ -126,6 +181,22 @@ async def process_file(message: Message, state: FSMContext, bot: Bot, crm_client
         logger.error(f"Ошибка загрузки файла '{file_name}' в CRM: {e}", exc_info=True)
         await status_msg.edit_text(f"❌ Ошибка при загрузке «{file_name}» в CRM.")
 
+
+# 2.1. Хендлер, принимающий текст как общий комментарий к файлам
+@add_files_router.message(
+    AddFilesFSM.waiting_for_files,
+    F.text,
+    HasPermissionFilter(Permission.ADD_FILES_FROM_VISIT),
+)
+async def set_pending_caption(message: Message, state: FSMContext):
+    """Сохраняет текст как комментарий для именования следующих файлов."""
+    text = (message.text or "").strip()
+    if not text:
+        await state.update_data(pending_caption=None)
+        await message.answer("Комментарий для файлов очищен.")
+        return
+    await state.update_data(pending_caption=text)
+    await message.answer("Комментарий сохранён. Он будет использоваться для имен файлов.")
 
 # 3. Хендлер, завершающий процесс
 @add_files_router.callback_query(
