@@ -112,9 +112,15 @@ if (-not $SkipBuild) {
 # ========================================
 Write-Step "Перезапуск контейнеров..."
 
-# Останавливаем и удаляем старые контейнеры, запускаем новые
-docker-compose down
-docker-compose up -d
+# Останавливаем пересобранные сервисы
+docker-compose stop bot map-backend
+
+# Запускаем с принудительным пересозданием (новые IP-адреса)
+docker-compose up -d --force-recreate bot map-backend
+
+# Перезапускаем nginx чтобы он обновил DNS-резолюцию внутренней сети
+Write-Step "Перезапуск nginx для обновления DNS..."
+docker-compose restart nginx
 
 Write-Success "Контейнеры перезапущены!"
 
