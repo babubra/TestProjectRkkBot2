@@ -22,6 +22,9 @@ class EnvSettings(BaseSettings):
     
     # Настройки прокси для NSPD в формате user:password@host:port
     NSPD_PROXY: str | None = None
+    
+    # Настройки прокси для Gemini (Google AI) в формате user:password@host:port
+    GEMINI_PROXY: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.local"),

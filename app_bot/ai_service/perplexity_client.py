@@ -3,6 +3,7 @@ import logging
 import os
 from functools import lru_cache
 
+import httpx
 from openai import AsyncOpenAI, OpenAIError
 
 from app_bot.config.config import get_env_settings
@@ -40,10 +41,19 @@ async def format_ticket_with_perplexity(raw_description: str) -> dict[str, str] 
     api_key = env_settings.PERPLEXITY_API_KEY
 
     if not api_key:
-        logger.error("API-ключ для Perplexity не найден в настройках.")
+        logger.error("API-ключ для Gemini не найден в настройках.")
         return None
 
-    client = AsyncOpenAI(api_key=api_key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
+    http_client = None
+    if env_settings.GEMINI_PROXY:
+        http_client = httpx.AsyncClient(proxy=f"http://{env_settings.GEMINI_PROXY}")
+        logger.info("Используется proxy для запросов к Gemini API")
+
+    client = AsyncOpenAI(
+        api_key=api_key, 
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        http_client=http_client
+    )
 
     system_prompt = get_system_prompt()
     if not system_prompt:
