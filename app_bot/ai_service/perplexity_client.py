@@ -43,7 +43,7 @@ async def format_ticket_with_perplexity(raw_description: str) -> dict[str, str] 
         logger.error("API-ключ для Perplexity не найден в настройках.")
         return None
 
-    client = AsyncOpenAI(api_key=api_key, base_url="https://api.perplexity.ai")
+    client = AsyncOpenAI(api_key=api_key, base_url="https://generativelanguage.googleapis.com/v1beta/openai/")
 
     system_prompt = get_system_prompt()
     if not system_prompt:
@@ -55,7 +55,7 @@ async def format_ticket_with_perplexity(raw_description: str) -> dict[str, str] 
     try:
         logger.info("Отправка запроса в Perplexity AI...")
         response = await client.chat.completions.create(
-            model="sonar",
+            model="gemini-2.5-flash",
             messages=[
                 {"role": "user", "content": full_prompt},
             ],

@@ -44,7 +44,7 @@ class NspdClient:
     - **Находит связанные кадастровые номера (например, здания на участке).**
     """
 
-    def __init__(self, timeout: float = 5.0, cooldown_minutes: int = 5):
+    def __init__(self, timeout: float = 15.0, cooldown_minutes: int = 5):
         """
         Инициализирует асинхронный клиент.
 
@@ -67,19 +67,19 @@ class NspdClient:
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36",
-                "Accept": "*/*",
-                "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
-                "Referer": "https://nspd.gov.ru/map?thematic=PKK&zoom=16&active_layers=36049",
-                "Origin": "https://nspd.gov.ru",
-                "Sec-Ch-Ua": '"Not(A:Brand";v="8", "Chromium";v="144", "Google Chrome";v="144"',
-                "Sec-Ch-Ua-Mobile": "?0",
-                "Sec-Ch-Ua-Platform": '"Windows"',
-                "Sec-Fetch-Dest": "empty",
-                "Sec-Fetch-Mode": "cors",
-                "Sec-Fetch-Site": "same-origin",
-                "DNT": "1",
-                "Priority": "u=1, i",
+                "accept": "*/*",
+                "accept-encoding": "gzip, deflate",
+                "accept-language": "ru,en-US;q=0.9,en;q=0.8,zh-TW;q=0.7,zh;q=0.6",
+                "dnt": "1",
+                "priority": "u=1, i",
+                "referer": "https://nspd.gov.ru/map?thematic=PKK&zoom=19.06666666666667&coordinate_x=2290592.113708982&coordinate_y=7321389.667522583&baseLayerId=235&theme_id=1&is_copy_url=true",
+                "sec-ch-ua": '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"macOS"',
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-origin",
+                "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537",
             },
             timeout=timeout,
             verify=False,
@@ -259,7 +259,10 @@ class NspdClient:
             httpx.HTTPStatusError,
             json.JSONDecodeError,
         ) as e:
-            print(f"-> Произошла сетевая ошибка или ошибка API: {type(e).__name__}")
+            if isinstance(e, httpx.HTTPStatusError):
+                print(f"-> Ошибка HTTP {e.response.status_code}: {e.response.text[:200]}")
+            else:
+                print(f"-> Произошла сетевая ошибка или ошибка API: {type(e).__name__}")
             await self._handle_failure()
             return None
         except Exception:
