@@ -23,6 +23,11 @@ logger = logging.getLogger(__name__)
 settings = get_env_settings()
 APP_TIMEZONE = timezone(timedelta(hours=settings.APP_TIMEZONE_OFFSET))
 
+# Лимит длины поля ServiceData в Megaplan CRM (65535 символов, с запасом)
+CRM_FIELD_MAX_LENGTH = 65000
+# Тяжёлые поля, не нужные для CRM (полные координаты полигонов)
+_EXCLUDE_FIELDS_FOR_CRM = {"coordinates_wgs84", "original_geometry"}
+
 
 async def get_main_menu_message(
     message: Message, session: AsyncSession, crm_client: CRMClient
@@ -235,14 +240,20 @@ async def prepare_deal_view_data(
         if all_cadastral_objects and all_cadastral_objects != deal.service_data:
             logger.info(f"Данные для сделки {deal.id} обогащены, обновляю в CRM...")
             json_data_to_save = json.dumps(
-                [obj.model_dump(mode="json") for obj in all_cadastral_objects],
+                [obj.model_dump(mode="json", exclude=_EXCLUDE_FIELDS_FOR_CRM) for obj in all_cadastral_objects],
                 ensure_ascii=False,
             )
-            asyncio.create_task(
-                crm_client.update_deal(
-                    deal.id, {"Category1000076CustomFieldServiceData": json_data_to_save}
+            if len(json_data_to_save) > CRM_FIELD_MAX_LENGTH:
+                logger.warning(
+                    f"Данные для сделки {deal.id} превышают лимит CRM "
+                    f"({len(json_data_to_save)} символов), пропуск обновления"
                 )
-            )
+            else:
+                asyncio.create_task(
+                    crm_client.update_deal(
+                        deal.id, {"Category1000076CustomFieldServiceData": json_data_to_save}
+                    )
+                )
             deal.service_data = all_cadastral_objects
 
         # --- Шаг 2: Форматирование сообщения для Telegram ---
@@ -386,7 +397,7 @@ async def get_cadastral_data_as_json(description: str, nspd_client: NspdClient) 
             return None
 
         # Сериализуем успешные результаты в JSON
-        data_to_serialize = [obj.model_dump(mode="json") for obj in successful_results]
+        data_to_serialize = [obj.model_dump(mode="json", exclude=_EXCLUDE_FIELDS_FOR_CRM) for obj in successful_results]
         json_string = json.dumps(data_to_serialize, ensure_ascii=False)
 
         logger.info(
