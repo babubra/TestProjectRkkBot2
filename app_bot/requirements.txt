@@ -1,5 +1,6 @@
 #app_bot\requirements.txt
 aiogram
+aiohttp-socks
 httpx
 openai
 pathspec

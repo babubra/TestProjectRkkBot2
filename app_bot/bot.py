@@ -4,6 +4,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 
 from app_bot.crm_service.crm_client import CRMClient
@@ -44,7 +45,19 @@ async def main() -> None:
     await db_manager.create_all()
 
     default_props = DefaultBotProperties(parse_mode=ParseMode.HTML)
-    bot = Bot(token=env_settings.BOT_TOKEN, default=default_props)
+
+    # Настройка прокси для Telegram API (обход блокировки)
+    session = None
+    if env_settings.TELEGRAM_PROXY:
+        import ssl
+        session = AiohttpSession(proxy=f"http://{env_settings.TELEGRAM_PROXY}")
+        # Отключаем проверку SSL — прокси использует самоподписанный сертификат
+        session._connector_init["ssl"] = ssl.create_default_context()
+        session._connector_init["ssl"].check_hostname = False
+        session._connector_init["ssl"].verify_mode = ssl.CERT_NONE
+        logger.info("Telegram Bot API: используется прокси-сервер")
+
+    bot = Bot(token=env_settings.BOT_TOKEN, default=default_props, session=session)
 
     dp = Dispatcher()
 
