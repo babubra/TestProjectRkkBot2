@@ -26,7 +26,8 @@ class EnvSettings(BaseSettings):
     # Настройки прокси для Gemini (Google AI) в формате user:password@host:port
     GEMINI_PROXY: str | None = None
 
-    # Настройки прокси для Telegram Bot API в формате user:password@host:port
+    # Настройки прокси для Telegram Bot API в формате protocol://user:password@host:port
+    # Поддерживаются протоколы: http, socks5
     TELEGRAM_PROXY: str | None = None
 
     model_config = SettingsConfigDict(

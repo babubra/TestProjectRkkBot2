@@ -50,7 +50,7 @@ async def main() -> None:
     session = None
     if env_settings.TELEGRAM_PROXY:
         import ssl
-        session = AiohttpSession(proxy=f"http://{env_settings.TELEGRAM_PROXY}")
+        session = AiohttpSession(proxy=env_settings.TELEGRAM_PROXY)
         # Отключаем проверку SSL — прокси использует самоподписанный сертификат
         session._connector_init["ssl"] = ssl.create_default_context()
         session._connector_init["ssl"].check_hostname = False
