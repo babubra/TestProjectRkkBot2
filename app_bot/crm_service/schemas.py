@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -24,8 +24,19 @@ class BaseSchema(BaseModel):
 class ContactInfo(BaseSchema):
     """Информация о контакте (телефон, email)."""
 
-    type: str
-    value: str
+    # Megaplan ранее возвращал строку ("phone", "email"), теперь может вернуть
+    # объект вида {'contentType': 'AddressType', 'id': '1', 'name': 'Офис'}.
+    # Используем Any, чтобы не падать при валидации.
+    type: Any = None
+    value: str = ""
+
+    @field_validator("type", mode="before")
+    @classmethod
+    def normalize_type(cls, v):
+        """Нормализует тип контакта: из dict извлекает 'name', строку оставляет как есть."""
+        if isinstance(v, dict):
+            return v.get("name") or v.get("contentType") or str(v)
+        return v
 
 
 class FileInfo(BaseSchema):
