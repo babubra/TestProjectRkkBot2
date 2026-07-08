@@ -289,11 +289,22 @@ async def prepare_deal_view_data(
         deal_url = urljoin(crm_client.base_url, f"/deals/{deal.id}/card/")
         link_text = f"{icon} Сделка {deal.id}."
         header_link = f'<a href="{deal_url}">{link_text}</a>'
-        visit_date_str = (
-            f"<b>{deal.visit_datetime.strftime('%d.%m.%Y %H:%M')}</b>"
-            if deal.visit_datetime and deal.visit_datetime.time() != datetime.min.time()
-            else f"<b>{deal.visit_datetime.strftime('%d.%m.%Y')}</b>"
-            if deal.visit_datetime
+        has_specific_time = bool(
+            deal.visit_datetime and deal.visit_datetime.time() != datetime.min.time()
+        )
+        if has_specific_time:
+            visit_date_str = f"<b>{deal.visit_datetime.strftime('%d.%m.%Y %H:%M')}</b>"
+        elif deal.visit_datetime:
+            visit_date_str = f"<b>{deal.visit_datetime.strftime('%d.%m.%Y')}</b>"
+        else:
+            visit_date_str = ""
+
+        # Предупреждающая строка сверху, если у заявки задано конкретное время выезда,
+        # чтобы геодезист его не пропустил.
+        time_alert_str = (
+            f"⏰❗️ <b>Внимание! Точное время выезда: "
+            f"{deal.visit_datetime.strftime('%H:%M')}</b>"
+            if has_specific_time
             else ""
         )
 
@@ -311,6 +322,7 @@ async def prepare_deal_view_data(
                 files_links_text = f"📎 <b>Файлы для выезда:</b> {', '.join(file_links)}"
 
         message_parts = [
+            time_alert_str,
             f"{header_link} {visit_date_str}".strip(),
             f"<b>{enriched_name}</b>",
             enriched_description,
