@@ -19,7 +19,11 @@ param(
     [switch]$NoBuild    # не пересобирать образ (нужно, если поменялся только .env)
 )
 
-$ErrorActionPreference = "Stop"
+# НЕ ставим "Stop": Windows PowerShell 5.1 превращает любой вывод нативной
+# команды в stderr в терминирующую ошибку, даже если команда отработала успешно
+# (docker и git постоянно пишут туда предупреждения). Вместо этого проверяем
+# код возврата явно — см. Assert-LastExitCode ниже.
+$ErrorActionPreference = "Continue"
 Set-Location $PSScriptRoot
 
 # Имя тома с боевой БД. Должно совпадать с `name:` в docker-compose.yml + "_data".
@@ -29,6 +33,12 @@ function Step { param($m) Write-Host "`n==> $m" -ForegroundColor Cyan }
 function Ok   { param($m) Write-Host "[OK] $m" -ForegroundColor Green }
 function Warn { param($m) Write-Host "[!] $m" -ForegroundColor Yellow }
 function Fail { param($m) Write-Host "[ERROR] $m" -ForegroundColor Red }
+
+# Единственный надёжный признак неудачи нативной команды — код возврата.
+function Assert-LastExitCode {
+    param($m)
+    if ($LASTEXITCODE -ne 0) { Fail $m; exit 1 }
+}
 
 Write-Host "===== RKK deploy | сервис: $Service =====" -ForegroundColor Magenta
 Write-Host "Каталог: $PSScriptRoot"
@@ -46,7 +56,8 @@ if (-not (Test-Path ".env")) {
     Write-Host "Состав переменных смотри в .env.example" -ForegroundColor Yellow
     exit 1
 }
-try { docker info *> $null } catch { Fail "Docker недоступен."; exit 1 }
+docker info *> $null
+Assert-LastExitCode "Docker недоступен — проверь, что Docker Desktop запущен."
 
 # Том с боевой базой должен существовать. Если его нет — почти наверняка
 # сбито имя проекта, и compose вот-вот создаст пустую БД вместо рабочей.
@@ -89,6 +100,7 @@ if (-not $NoPull) {
         exit 1
     }
     git pull --ff-only origin main
+    Assert-LastExitCode "git pull не прошёл — разберись с состоянием репозитория."
     Ok "Код обновлён до $((git rev-parse --short HEAD).Trim())"
 } else {
     Warn "Пропуск git pull (-NoPull)"
@@ -106,6 +118,7 @@ switch ($Service) {
 if (-not $NoBuild) {
     Step "Сборка образов: $($targets -join ', ')"
     docker compose build $targets
+    Assert-LastExitCode "Сборка образа не удалась — смотри вывод выше."
     Ok "Образы собраны"
 } else {
     Warn "Пропуск сборки (-NoBuild)"
@@ -117,6 +130,7 @@ if (-not $NoBuild) {
 # Все нужные сервисы перечислены в $targets явно.
 Step "Пересоздание: $($targets -join ', ')"
 docker compose up -d --force-recreate --no-deps $targets
+Assert-LastExitCode "Не удалось поднять контейнеры — смотри вывод выше."
 Ok "Контейнеры подняты"
 
 # nginx кеширует IP контейнера map-backend на момент своего старта.
