@@ -72,12 +72,19 @@ if (-not $volumeExists) {
 # и compose упадёт с 'container name already in use'. Ловим это заранее.
 # Разбираем JSON, а не --format: PowerShell 5.1 портит вложенные кавычки
 # в Go-шаблонах при передаче аргументов нативной команде.
+# Для несуществующего контейнера docker inspect печатает в stdout "[]",
+# поэтому непустого вывода мало — проверяем, что массив реально не пуст.
 $botJson = (docker inspect rkk-bot 2>$null | Out-String).Trim()
+$botExists = $false
 $botProject = $null
 if ($botJson) {
-    $botProject = (ConvertFrom-Json $botJson)[0].Config.Labels.'com.docker.compose.project'
+    $parsed = @(ConvertFrom-Json $botJson)
+    if ($parsed.Count -gt 0) {
+        $botExists = $true
+        $botProject = $parsed[0].Config.Labels.'com.docker.compose.project'
+    }
 }
-if ($botJson -and [string]::IsNullOrWhiteSpace($botProject)) {
+if ($botExists -and [string]::IsNullOrWhiteSpace($botProject)) {
     Warn "Контейнер rkk-bot создан вручную (docker run), а не через compose."
     Write-Host "Убери его, прежде чем продолжать — том с БД при этом не пострадает:" -ForegroundColor Yellow
     Write-Host "  docker rename rkk-bot rkk-bot-manual; docker stop rkk-bot-manual" -ForegroundColor Gray
