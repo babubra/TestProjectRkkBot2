@@ -1,4 +1,4 @@
-# ===========================================
+﻿# ===========================================
 # deploy.ps1 — единый скрипт развёртывания
 # ===========================================
 # Запускать НА СЕРВЕРЕ из боевого каталога C:\Apps\TESTPROJECTRKKOBT2
@@ -59,8 +59,14 @@ if (-not $volumeExists) {
 
 # Бот, запущенный мимо compose (через docker run), займёт имя контейнера
 # и compose упадёт с 'container name already in use'. Ловим это заранее.
-$botProject = docker inspect rkk-bot --format "{{index .Config.Labels `"com.docker.compose.project`"}}" 2>$null
-if ($LASTEXITCODE -eq 0 -and [string]::IsNullOrWhiteSpace($botProject)) {
+# Разбираем JSON, а не --format: PowerShell 5.1 портит вложенные кавычки
+# в Go-шаблонах при передаче аргументов нативной команде.
+$botJson = (docker inspect rkk-bot 2>$null | Out-String).Trim()
+$botProject = $null
+if ($botJson) {
+    $botProject = (ConvertFrom-Json $botJson)[0].Config.Labels.'com.docker.compose.project'
+}
+if ($botJson -and [string]::IsNullOrWhiteSpace($botProject)) {
     Warn "Контейнер rkk-bot создан вручную (docker run), а не через compose."
     Write-Host "Убери его, прежде чем продолжать — том с БД при этом не пострадает:" -ForegroundColor Yellow
     Write-Host "  docker rename rkk-bot rkk-bot-manual; docker stop rkk-bot-manual" -ForegroundColor Gray
