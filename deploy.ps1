@@ -1,153 +1,141 @@
 # ===========================================
-# deploy.ps1 - Скрипт развёртывания на сервере
+# deploy.ps1 — единый скрипт развёртывания
 # ===========================================
-# Запускать на сервере из директории проекта:
-#   .\deploy.ps1
+# Запускать НА СЕРВЕРЕ из боевого каталога C:\Apps\TESTPROJECTRKKOBT2
 #
-# Что делает:
-#   1. Стягивает последние изменения из GitHub
-#   2. Пересобирает Docker-образы
-#   3. Перезапускает контейнеры с новым кодом
+#   .\deploy.ps1                      # обновить только бота (самый частый случай)
+#   .\deploy.ps1 -Service all         # обновить весь стек
+#   .\deploy.ps1 -NoPull -NoBuild     # перечитать .env без обновления кода
+#
+# Подробности и разбор нештатных ситуаций — в DEPLOY.md
 # ===========================================
 
 param(
-    [switch]$Force,       # Принудительное обновление (сброс локальных изменений)
-    [switch]$NoPull,      # Пропустить git pull (только пересборка)
-    [switch]$SkipBuild    # Пропустить сборку (только перезапуск)
+    # Что обновляем: bot | backend | web | all
+    [ValidateSet("bot", "backend", "web", "all")]
+    [string]$Service = "bot",
+
+    [switch]$NoPull,    # не тянуть код из git
+    [switch]$NoBuild    # не пересобирать образ (нужно, если поменялся только .env)
 )
 
 $ErrorActionPreference = "Stop"
+Set-Location $PSScriptRoot
 
-# Цвета для вывода
-function Write-Step { param($msg) Write-Host "`n==> $msg" -ForegroundColor Cyan }
-function Write-Success { param($msg) Write-Host "[OK] $msg" -ForegroundColor Green }
-function Write-Warn { param($msg) Write-Host "[!] $msg" -ForegroundColor Yellow }
-function Write-Fail { param($msg) Write-Host "[ERROR] $msg" -ForegroundColor Red }
+# Имя тома с боевой БД. Должно совпадать с `name:` в docker-compose.yml + "_data".
+$DataVolume = "testprojectrkkobt2_data"
 
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Magenta
-Write-Host "   RKK Bot - Deployment Script" -ForegroundColor Magenta
-Write-Host "============================================" -ForegroundColor Magenta
-Write-Host "   Время: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-Write-Host ""
+function Step { param($m) Write-Host "`n==> $m" -ForegroundColor Cyan }
+function Ok   { param($m) Write-Host "[OK] $m" -ForegroundColor Green }
+function Warn { param($m) Write-Host "[!] $m" -ForegroundColor Yellow }
+function Fail { param($m) Write-Host "[ERROR] $m" -ForegroundColor Red }
 
-# Проверка что мы в правильной директории
+Write-Host "===== RKK deploy | сервис: $Service =====" -ForegroundColor Magenta
+Write-Host "Каталог: $PSScriptRoot"
+Write-Host "Время:   $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+
+# --- Проверки окружения -------------------------------------------------
+Step "Проверки"
+
 if (-not (Test-Path "docker-compose.yml")) {
-    Write-Fail "Файл docker-compose.yml не найден!"
-    Write-Host "Убедитесь, что вы находитесь в корне проекта." -ForegroundColor Yellow
+    Fail "Нет docker-compose.yml — запусти скрипт из корня боевого каталога."
+    exit 1
+}
+if (-not (Test-Path ".env")) {
+    Fail "Нет .env — без него контейнеры стартуют без токенов и прокси."
+    Write-Host "Состав переменных смотри в .env.example" -ForegroundColor Yellow
+    exit 1
+}
+try { docker info *> $null } catch { Fail "Docker недоступен."; exit 1 }
+
+# Том с боевой базой должен существовать. Если его нет — почти наверняка
+# сбито имя проекта, и compose вот-вот создаст пустую БД вместо рабочей.
+$volumeExists = docker volume ls --format "{{.Name}}" | Select-String -SimpleMatch $DataVolume
+if (-not $volumeExists) {
+    Fail "Не найден том $DataVolume — велик риск стартовать с ПУСТОЙ базой."
+    Write-Host "Проверь строку 'name:' в docker-compose.yml и вывод 'docker volume ls'." -ForegroundColor Yellow
     exit 1
 }
 
-# Проверка что Docker запущен
-try {
-    docker info | Out-Null
-} catch {
-    Write-Fail "Docker не запущен или недоступен!"
+# Бот, запущенный мимо compose (через docker run), займёт имя контейнера
+# и compose упадёт с 'container name already in use'. Ловим это заранее.
+$botProject = docker inspect rkk-bot --format "{{index .Config.Labels `"com.docker.compose.project`"}}" 2>$null
+if ($LASTEXITCODE -eq 0 -and [string]::IsNullOrWhiteSpace($botProject)) {
+    Warn "Контейнер rkk-bot создан вручную (docker run), а не через compose."
+    Write-Host "Убери его, прежде чем продолжать — том с БД при этом не пострадает:" -ForegroundColor Yellow
+    Write-Host "  docker rename rkk-bot rkk-bot-manual; docker stop rkk-bot-manual" -ForegroundColor Gray
     exit 1
 }
+Ok "Окружение в порядке"
 
-# ========================================
-# ШАГ 1: Получение обновлений из GitHub
-# ========================================
+# --- 1. Обновление кода -------------------------------------------------
 if (-not $NoPull) {
-    Write-Step "Получение обновлений из GitHub..."
-    
-    # Проверяем текущую ветку
-    $currentBranch = git rev-parse --abbrev-ref HEAD
-    Write-Host "Текущая ветка: $currentBranch"
-    
-    # Получаем информацию о remote
-    git fetch origin
-    
-    # Проверяем есть ли локальные изменения
-    $status = git status --porcelain
-    if ($status) {
-        if ($Force) {
-            Write-Warn "Обнаружены локальные изменения. Сбрасываем (--Force)..."
-            git reset --hard HEAD
-            git clean -fd
-        } else {
-            Write-Warn "Обнаружены локальные изменения:"
-            git status --short
-            Write-Host ""
-            Write-Host "Используйте -Force для сброса локальных изменений" -ForegroundColor Yellow
-            Write-Host "Или закоммитьте/сохраните изменения вручную" -ForegroundColor Yellow
-            exit 1
-        }
+    Step "git pull --ff-only origin main"
+    $branch = (git rev-parse --abbrev-ref HEAD).Trim()
+    if ($branch -ne "main") {
+        Fail "Текущая ветка '$branch', а прод живёт на 'main'. Переключись: git switch main"
+        exit 1
     }
-    
-    # Показываем что будет обновлено
-    $behind = git rev-list --count HEAD..origin/$currentBranch 2>$null
-    if ($behind -gt 0) {
-        Write-Host "Доступно $behind новых коммитов:"
-        git log --oneline HEAD..origin/$currentBranch | Select-Object -First 5
-        if ($behind -gt 5) { Write-Host "... и ещё $($behind - 5) коммитов" }
-    } else {
-        Write-Success "Код уже актуален!"
+    if (git status --porcelain) {
+        Fail "В рабочем дереве есть незакоммиченные изменения:"
+        git status --short
+        Write-Host "Закоммить их или откати — прод должен точно соответствовать git." -ForegroundColor Yellow
+        exit 1
     }
-    
-    # Применяем изменения
-    git pull origin $currentBranch
-    Write-Success "Код обновлён!"
+    git pull --ff-only origin main
+    Ok "Код обновлён до $((git rev-parse --short HEAD).Trim())"
 } else {
-    Write-Warn "Пропуск git pull (--NoPull)"
+    Warn "Пропуск git pull (-NoPull)"
 }
 
-# ========================================
-# ШАГ 2: Пересборка Docker-образов
-# ========================================
-if (-not $SkipBuild) {
-    Write-Step "Пересборка Docker-образов..."
-    
-    # Сборка с использованием кэша для ускорения
-    docker-compose build
-    
-    Write-Success "Образы пересобраны!"
-} else {
-    Write-Warn "Пропуск сборки (--SkipBuild)"
+# --- 2. Какие сервисы трогаем -------------------------------------------
+switch ($Service) {
+    "bot"     { $targets = @("bot") }
+    "backend" { $targets = @("map-backend") }
+    "web"     { $targets = @("nginx") }
+    "all"     { $targets = @("map-backend", "bot", "nginx") }
 }
 
-# ========================================
-# ШАГ 3: Перезапуск контейнеров
-# ========================================
-Write-Step "Перезапуск контейнеров..."
+# --- 3. Сборка ----------------------------------------------------------
+if (-not $NoBuild) {
+    Step "Сборка образов: $($targets -join ', ')"
+    docker compose build $targets
+    Ok "Образы собраны"
+} else {
+    Warn "Пропуск сборки (-NoBuild)"
+}
 
-# Останавливаем пересобранные сервисы
-docker-compose stop bot map-backend
+# --- 4. Пересоздание контейнеров ----------------------------------------
+# --no-deps обязателен: без него depends_on подтянет и пересоздаст map-backend
+# даже при обновлении одного бота, а после этого nginx отдаёт 502.
+# Все нужные сервисы перечислены в $targets явно.
+Step "Пересоздание: $($targets -join ', ')"
+docker compose up -d --force-recreate --no-deps $targets
+Ok "Контейнеры подняты"
 
-# Запускаем с принудительным пересозданием (новые IP-адреса)
-docker-compose up -d --force-recreate bot map-backend
+# nginx кеширует IP контейнера map-backend на момент своего старта.
+# Если бэкенд пересоздан — nginx до перезапуска будет отдавать 502.
+if (($targets -contains "map-backend") -and ($targets -notcontains "nginx")) {
+    Step "Перезапуск nginx (сброс кеша DNS для map-backend)"
+    docker compose restart nginx
+    Ok "nginx перезапущен"
+}
 
-# Перезапускаем nginx чтобы он обновил DNS-резолюцию внутренней сети
-Write-Step "Перезапуск nginx для обновления DNS..."
-docker-compose restart nginx
-
-Write-Success "Контейнеры перезапущены!"
-
-# ========================================
-# ШАГ 4: Проверка статуса
-# ========================================
-Write-Step "Проверка статуса контейнеров..."
+# --- 5. Статус и логи ---------------------------------------------------
 Start-Sleep -Seconds 3
+Step "Статус"
+docker compose ps
 
-docker-compose ps
+Step "Логи (последние 20 строк по каждому обновлённому сервису)"
+foreach ($t in $targets) {
+    Write-Host "`n--- $t ---" -ForegroundColor Yellow
+    docker compose logs --tail 20 $t
+}
 
-# Показываем последние логи каждого сервиса
-Write-Step "Последние логи (5 строк)..."
-Write-Host ""
-Write-Host "--- rkk-bot ---" -ForegroundColor Yellow
-docker logs rkk-bot --tail 5 2>&1
-Write-Host ""
-Write-Host "--- rkk-map-backend ---" -ForegroundColor Yellow
-docker logs rkk-map-backend --tail 5 2>&1
-
-Write-Host ""
-Write-Host "============================================" -ForegroundColor Magenta
-Write-Host "   Развёртывание завершено!" -ForegroundColor Green
-Write-Host "============================================" -ForegroundColor Magenta
-Write-Host ""
-Write-Host "Полезные команды:" -ForegroundColor Gray
-Write-Host "  docker-compose logs -f bot        # Логи бота в реальном времени"
-Write-Host "  docker-compose logs -f map-backend # Логи бэкенда"
-Write-Host "  docker-compose restart bot        # Перезапуск только бота"
-Write-Host ""
+Write-Host "`nГотово." -ForegroundColor Green
+if ($targets -contains "bot") {
+    Write-Host "Проверь в Telegram, что бот отвечает и список заявок отдаётся с данными." -ForegroundColor Gray
+}
+if ($targets -contains "nginx") {
+    Write-Host "Проверь https://turbomap.mooo.com — карта открывается, сертификат валиден." -ForegroundColor Gray
+}
