@@ -1,6 +1,8 @@
 #map_backend\requirements.txt
 fastapi
 uvicorn[standard]
-sqlalchemy
+# Именно [asyncio]: расширение тянет greenlet, без которого
+# sqlalchemy.ext.asyncio не импортируется
+sqlalchemy[asyncio]
 aiosqlite
 pydantic-settings

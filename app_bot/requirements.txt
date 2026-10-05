@@ -8,6 +8,8 @@ protobuf
 pydantic
 pydantic_settings
 pyproj
-SQLAlchemy
+# Именно [asyncio]: расширение тянет greenlet, без которого
+# sqlalchemy.ext.asyncio не импортируется и бот падает на старте.
+SQLAlchemy[asyncio]
 aiosqlite
 # построение зависимостей: pipreqs ./app_bot --encoding utf-8 --force --savepath ./requirements.txt
