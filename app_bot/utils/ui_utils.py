@@ -25,6 +25,11 @@ APP_TIMEZONE = timezone(timedelta(hours=settings.APP_TIMEZONE_OFFSET))
 
 # Лимит длины поля ServiceData в Megaplan CRM (65535 символов, с запасом)
 CRM_FIELD_MAX_LENGTH = 65000
+# Лимит одного сообщения в Telegram — 4096 символов. Описание сделки приходит
+# из CRM и бывает любой длины, остальные части сообщения предсказуемо короткие,
+# поэтому режем именно описание, оставляя запас на заголовок, название,
+# ссылки на файлы и список исполнителей.
+DESCRIPTION_MAX_LENGTH = 2500
 # Тяжёлые поля, не нужные для CRM (полные координаты полигонов)
 _EXCLUDE_FIELDS_FOR_CRM = {"coordinates_wgs84", "original_geometry"}
 
@@ -265,6 +270,20 @@ async def prepare_deal_view_data(
 
         enriched_name = deal.name
         enriched_description = ""
+
+        # Режем описание ДО подстановки ссылок на кадастровые номера: иначе
+        # обрезка могла бы разорвать тег <a> и Telegram отверг бы всё сообщение.
+        plain_description = (
+            strip_html_and_preserve_breaks(deal.description) if deal.description else ""
+        )
+        description_truncated = len(plain_description) > DESCRIPTION_MAX_LENGTH
+        if description_truncated:
+            logger.warning(
+                f"Описание сделки {deal.id} длиной {len(plain_description)} символов "
+                f"сокращено до {DESCRIPTION_MAX_LENGTH} для отправки в Telegram."
+            )
+            plain_description = plain_description[:DESCRIPTION_MAX_LENGTH].rstrip() + "…"
+
         if coord_map:
             pattern = re.compile("|".join(re.escape(kn) for kn in coord_map.keys()))
 
@@ -275,12 +294,10 @@ async def prepare_deal_view_data(
                 return f'<a href="{link}">{cad_num}</a>'
 
             enriched_name = pattern.sub(replacer, deal.name)
-            if deal.description:
-                enriched_description = pattern.sub(
-                    replacer, strip_html_and_preserve_breaks(deal.description)
-                )
-        elif deal.description:
-            enriched_description = strip_html_and_preserve_breaks(deal.description)
+            if plain_description:
+                enriched_description = pattern.sub(replacer, plain_description)
+        elif plain_description:
+            enriched_description = plain_description
 
         icon = DEAL_STATUS_ICONS.get(deal.state.id, DEFAULT_STATUS_ICON)
         if deal.visit_result:
@@ -326,6 +343,9 @@ async def prepare_deal_view_data(
             f"{header_link} {visit_date_str}".strip(),
             f"<b>{enriched_name}</b>",
             enriched_description,
+            "✂️ <i>Описание сокращено, полный текст — в карточке сделки.</i>"
+            if description_truncated
+            else "",
             files_links_text,
             f"<b>Исполнители:</b> {', '.join([e.name for e in deal.executors])}"
             if deal.executors

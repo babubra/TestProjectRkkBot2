@@ -1,7 +1,9 @@
+import logging
 from datetime import datetime, timedelta, timezone
 
 from aiogram import F, Router
 from app_bot.keyboards.view_ticket_keyboards import ViewDateCallback
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
@@ -17,10 +19,39 @@ from app_bot.utils.ui_utils import (
 )
 
 
+logger = logging.getLogger(__name__)
+
 view_tickets_router = Router()
 
 settings = get_env_settings()
 APP_TIMEZONE = timezone(timedelta(hours=settings.APP_TIMEZONE_OFFSET))
+
+
+async def send_deal_messages(message: Message, items: list[dict]) -> None:
+    """
+    Отправляет подготовленные сообщения по заявкам.
+
+    Сбой на одной заявке не должен обрывать весь список: раньше слишком длинное
+    сообщение (лимит Telegram — 4096 символов) роняло обработчик целиком, и
+    пользователь не получал ни эту заявку, ни все последующие.
+    """
+    for item in items:
+        try:
+            await message.answer(
+                text=item["text"],
+                reply_markup=item["reply_markup"],
+                disable_web_page_preview=True,
+            )
+        except TelegramBadRequest as e:
+            logger.error(
+                f"Telegram отклонил сообщение по заявке "
+                f"({len(item['text'])} символов): {e}"
+            )
+            await message.answer(
+                "⚠️ Одну заявку показать не удалось — Telegram отклонил сообщение. "
+                "Откройте её в CRM по кнопке ниже.",
+                reply_markup=item["reply_markup"],
+            )
 
 
 class ViewTicketsByDateFSM(StatesGroup):
@@ -62,12 +93,7 @@ async def view_deals_by_selected_date_handler(
         user_telegram_id=query.from_user.id,
     )
 
-    for item in result["messages_to_send"]:
-        await query.message.answer(
-            text=item["text"],
-            reply_markup=item["reply_markup"],
-            disable_web_page_preview=True,
-        )
+    await send_deal_messages(query.message, result["messages_to_send"])
 
     map_url = result.get("map_url")
     if map_url:
@@ -121,12 +147,7 @@ async def process_date_for_view(
         user_telegram_id=message.from_user.id,
     )
 
-    for item in result["messages_to_send"]:
-        await message.answer(
-            text=item["text"],
-            reply_markup=item["reply_markup"],
-            disable_web_page_preview=True,
-        )
+    await send_deal_messages(message, result["messages_to_send"])
 
     map_url = result.get("map_url")
     if map_url:
